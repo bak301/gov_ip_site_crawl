@@ -1,5 +1,5 @@
-const LIMIT = 5;
-const thread_count = 5;
+const LIMIT = 2;
+const thread_count = 2;
 
 const fs = require("fs");
 const base_url =
@@ -38,7 +38,7 @@ function recurse_request(i) {
         return response.text();
       })
       .then((text) => {
-        if (text.includes("An unexpected error has occured")) {
+        if (text.includes("An unexpected server error has occurred")) {
           console.log("Job number " + i + "has failed !\n");
         } else {
           fs.appendFileSync(
