@@ -131,3 +131,6 @@ dist
 
 # data file
 .csv
+error.html
+result.html
+package-lock.json
