@@ -3,7 +3,7 @@ const config = {
     DATA_PATH : "ID_Trademark.csv",
     RETRY_LIMIT : 3,
     delay : {
-        BETWEEN_REQUEST : 0
+        BETWEEN_REQUEST : 200
     },
     string : {
         INTERNAL_SERVER_ERROR : "An unexpected server error has occurred"

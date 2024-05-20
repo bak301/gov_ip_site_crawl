@@ -14,6 +14,7 @@ async function start() {
 }
 
 async function recurse_request(i, retryCount = 0) {
+  await delay(config.delay.BETWEEN_REQUEST)
   if (i >= LIMIT) {
     console.log("request completed");
     return;
@@ -73,6 +74,10 @@ function logJobDetails(i, response, IDs, startTime) {
   console.log(`HTTP Status : ${response.status} : ${response.statusText}`);
   console.log("ID :" + IDs[i]);
   console.log(`Finish time : ${((endTime - startTime) / 1000).toFixed(2)}s`);
+}
+
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 start();
