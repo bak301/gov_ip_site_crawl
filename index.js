@@ -13,10 +13,10 @@ async function start() {
 
 async function recurse_request(i, retryCount = 0) {
   await delay(config.delay.BETWEEN_REQUEST)
-  if (i >= config.TOTAL_REQUEST) {
+  if (i >= config.TOTAL_REQUEST || i >= IDs.length) {
     console.log("request completed");
     return;
-  }
+  } 
 
   let startTime = performance.now();
   try {
