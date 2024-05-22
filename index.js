@@ -72,7 +72,7 @@ async function handleServerError(
 
 function extractDataThenContinue(i, text) {
   //let outputData = cleanHtml(text);
-  let outputData = minifyHtml(text)
+  let outputData = extractFromHTML(text);
   fs.appendFileSync(config.path.output, outputData);
   recurse_request((i += config.THREAD_COUNT));
 }
@@ -110,15 +110,43 @@ function cleanHtml(text) {
   return cleanedHtml;
 }
 
-function minifyHtml(text) {
+function extractFromHTML(text) {
   let doc = new JSDOM(text).window.document;
-  let accordion1aData = Array.from(doc.querySelectorAll(".product-form-details")).map(
-    (detail) => detail.innerText
-  );
-  let tableData = doc.querySelector("#accordion-3a table")
+  let accordion1aData = Array.from(
+    doc.querySelectorAll(".product-form-details")
+  ).map((row, index) => {
+    if (index === 10) {
+      let combinedText = Array.from(row.querySelectorAll(".row"))
+        .map((childRow) => {
+          let col2Text = childRow.querySelector(".col-md-2").textContent.trim();
+          let col10Text = childRow
+            .querySelector(".col-md-10")
+            .textContent.trim();
+          return `Class/Nhóm ${col2Text}: ${col10Text}<linefeed>`;
+        })
+        .join("<linefeed>");
+      return combinedText;
+    } else {
+      return row.textContent;
+    }
+  });
+  let table = doc.querySelector("#accordion-3a table");
+  let tableData = Array.from(table.querySelectorAll("tr"))
+    .map((row) => {
+      let columns = Array.from(row.querySelectorAll("td")).map((cell) =>
+        cell.textContent.trim()
+      );
+      if (columns.length >= 3) {
+        let temp = columns[0];
+        columns[0] = columns[1];
+        columns[1] = temp;
+      }
+      return columns.join("<tab>");
+    })
+    .join("<linefeed>");
 
-  let csvContent = accordion1aData.join("\t") + '\t' + tableData + "\n";
-  return csvContent
+  let csvContent = accordion1aData.join("\t") + "\t" + tableData + "\n";
+  return csvContent;
 }
 
 start();
