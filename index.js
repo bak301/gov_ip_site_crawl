@@ -22,12 +22,17 @@ async function recurse_request(i, retryCount = 0) {
   try {
     const response = await fetch(config.BASE_URL + IDs[i]);
     logJobDetails(i, response, IDs, startTime);
-    const text = await response.text();
-
-    if (isTextError(text)) {
-      await handleServerError(i, retryCount);
+    let text = "";
+    if (response.status != 200) {
+      await handleServerError(i, retryCount, `HTTP Respond  ${response.status} : ${response.statusText}`)
     } else {
-      extractDataThenContinue(i, text);
+      text = await response.text();
+
+      if (isTextError(text)) {
+        await handleServerError(i, retryCount);
+      } else {
+        extractDataThenContinue(i, text);
+      }
     }
   } catch (error) {
     console.error("Error while fetch:", error);
@@ -41,7 +46,7 @@ function isTextError(text) {
   );
 }
 
-async function handleServerError(i, retryCount) {
+async function handleServerError(i, retryCount, reason = 'Internal server error') {
   if (retryCount < config.RETRY_LIMIT) {
     console.log(`Retrying job number ${i}... Attempt ${retryCount + 1}`);
     await recurse_request(i, retryCount + 1);
@@ -49,7 +54,7 @@ async function handleServerError(i, retryCount) {
     console.log(
       `Job number ${i} has failed after ${config.RETRY_LIMIT} attempts. Moving on ....\n`
     );
-    fs.appendFileSync(config.path.err, `ID ${IDs[i].trim()} has failed !\n`);
+    fs.appendFileSync(config.path.error, `ID ${IDs[i].trim()} has failed : ${reason}\n`);
     await recurse_request((i += config.THREAD_COUNT));
   }
 }
