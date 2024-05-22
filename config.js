@@ -6,9 +6,9 @@ const config = {
      error : "error.txt",
      log : "log.txt"
     },
-    RETRY_LIMIT : 3,
-    TOTAL_REQUEST : 5,
-    THREAD_COUNT : 1,
+    RETRY_LIMIT : 15,
+    TOTAL_REQUEST : 5000,
+    THREAD_COUNT : 15,
     delay : {
         BETWEEN_REQUEST : 200
     },

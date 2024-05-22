@@ -122,9 +122,9 @@ function extractFromHTML(text) {
           let col10Text = childRow
             .querySelector(".col-md-10")
             .textContent.trim();
-          return `Class/Nhóm ${col2Text}: ${col10Text}<linefeed>`;
+          return `Class/Nhóm ${col2Text}: ${col10Text}<lf>`;
         })
-        .join("<linefeed>");
+        .join("<lf>");
       return combinedText;
     } else {
       return row.textContent;
@@ -141,9 +141,9 @@ function extractFromHTML(text) {
         columns[0] = columns[1];
         columns[1] = temp;
       }
-      return columns.join("<tab>");
+      return columns.join("<t>");
     })
-    .join("<linefeed>");
+    .join("<lf>");
 
   let csvContent = accordion1aData.join("\t") + "\t" + tableData + "\n";
   return csvContent;
