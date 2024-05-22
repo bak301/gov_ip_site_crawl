@@ -1,5 +1,3 @@
-const LIMIT = 20;
-const thread_count = 5;
 const fs = require("fs");
 const JSDOM = require("jsdom").JSDOM;
 const config = require("./config.js");
@@ -7,7 +5,7 @@ const IDs = fs.readFileSync(config.DATA_PATH, "utf-8").split("\n");
 
 async function start() {
   const promises = [];
-  for (let index = 0; index < thread_count; index++) {
+  for (let index = 0; index < config.THREAD_COUNT; index++) {
     promises.push(recurse_request(index));
   }
   await Promise.all(promises);
@@ -15,7 +13,7 @@ async function start() {
 
 async function recurse_request(i, retryCount = 0) {
   await delay(config.delay.BETWEEN_REQUEST)
-  if (i >= LIMIT) {
+  if (i >= config.TOTAL_REQUEST) {
     console.log("request completed");
     return;
   }
@@ -26,7 +24,7 @@ async function recurse_request(i, retryCount = 0) {
     logJobDetails(i, response, IDs, startTime);
     const text = await response.text();
 
-    if (text.includes(config.string.INTERNAL_SERVER_ERROR)) {
+    if (isTextError(text)) {
       await handleServerError(i, retryCount);
     } else {
       extractDataThenContinue(i, text);
@@ -36,6 +34,11 @@ async function recurse_request(i, retryCount = 0) {
   }
 }
 
+function isTextError(text) {
+  return text.includes(config.string.INTERNAL_SERVER_ERROR) ||
+  text.includes("${app1type}")
+}
+
 async function handleServerError(i, retryCount) {
   if (retryCount < config.RETRY_LIMIT) {
     console.log(`Retrying job number ${i}... Attempt ${retryCount + 1}`);
@@ -43,14 +46,14 @@ async function handleServerError(i, retryCount) {
   } else {
     console.log(`Job number ${i} has failed after ${config.RETRY_LIMIT} attempts. Moving on ....\n`);
     fs.appendFileSync("error.html", `ID ${IDs[i].trim()} has failed !\n`);
-    await recurse_request((i += thread_count));
+    await recurse_request((i += config.THREAD_COUNT));
   }
 }
 
 function extractDataThenContinue(i, text) {
   let outputData = cleanHtml(text);
   fs.appendFileSync("result.html", outputData);
-  recurse_request((i += thread_count));
+  recurse_request((i += config.THREAD_COUNT));
 }
 
 function cleanHtml(text) {
