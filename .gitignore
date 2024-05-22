@@ -130,7 +130,7 @@ dist
 .pnp.*
 
 # data file
-.csv
-error.html
-result.html
+*.csv
+*.html
 package-lock.json
+*.txt
