@@ -45,7 +45,7 @@ async function handleServerError(i, retryCount) {
     await recurse_request(i, retryCount + 1);
   } else {
     console.log(`Job number ${i} has failed after ${config.RETRY_LIMIT} attempts. Moving on ....\n`);
-    fs.appendFileSync("error.html", `ID ${IDs[i].trim()} has failed !\n`);
+    fs.appendFileSync(config.path.error, `ID ${IDs[i].trim()} has failed !\n`);
     await recurse_request((i += config.THREAD_COUNT));
   }
 }
