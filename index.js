@@ -24,7 +24,11 @@ async function recurse_request(i, retryCount = 0) {
     logJobDetails(i, response, IDs, startTime);
     let text = "";
     if (response.status != 200) {
-      await handleServerError(i, retryCount, `HTTP Respond  ${response.status} : ${response.statusText}`)
+      await handleServerError(
+        i,
+        retryCount,
+        `HTTP Respond  ${response.status} : ${response.statusText}`
+      );
     } else {
       text = await response.text();
 
@@ -46,7 +50,11 @@ function isTextError(text) {
   );
 }
 
-async function handleServerError(i, retryCount, reason = 'Internal server error') {
+async function handleServerError(
+  i,
+  retryCount,
+  reason = "Internal server error"
+) {
   if (retryCount < config.RETRY_LIMIT) {
     console.log(`Retrying job number ${i}... Attempt ${retryCount + 1}`);
     await recurse_request(i, retryCount + 1);
@@ -54,15 +62,36 @@ async function handleServerError(i, retryCount, reason = 'Internal server error'
     console.log(
       `Job number ${i} has failed after ${config.RETRY_LIMIT} attempts. Moving on ....\n`
     );
-    fs.appendFileSync(config.path.error, `ID ${IDs[i].trim()} has failed : ${reason}\n`);
+    fs.appendFileSync(
+      config.path.error,
+      `ID ${IDs[i].trim()} has failed : ${reason}\n`
+    );
     await recurse_request((i += config.THREAD_COUNT));
   }
 }
 
 function extractDataThenContinue(i, text) {
-  let outputData = cleanHtml(text);
+  //let outputData = cleanHtml(text);
+  let outputData = minifyHtml(text)
   fs.appendFileSync(config.path.output, outputData);
   recurse_request((i += config.THREAD_COUNT));
+}
+
+function logJobDetails(i, response, IDs, startTime) {
+  let endTime = performance.now();
+  let currentTime = new Date(Date.now()).toLocaleString("vi-VN");
+  const logContent = `\nJob number ${i} has been finished at ${currentTime}\nHTTP Status : ${
+    response.status
+  } : ${response.statusText}\nID : ${IDs[i]}\nFinish time : ${(
+    (endTime - startTime) /
+    1000
+  ).toFixed(2)}s`;
+  console.log(logContent);
+  fs.appendFileSync(config.path.log, logContent + "\n-----");
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function cleanHtml(text) {
@@ -81,21 +110,15 @@ function cleanHtml(text) {
   return cleanedHtml;
 }
 
-function logJobDetails(i, response, IDs, startTime) {
-  let endTime = performance.now();
-  let currentTime = new Date(Date.now()).toLocaleString("vi-VN");
-  const logContent = `\nJob number ${i} has been finished at ${currentTime}\nHTTP Status : ${
-    response.status
-  } : ${response.statusText}\nID : ${IDs[i]}\nFinish time : ${(
-    (endTime - startTime) /
-    1000
-  ).toFixed(2)}s`;
-  console.log(logContent);
-  fs.appendFileSync(config.path.log, logContent + "\n-----");
-}
+function minifyHtml(text) {
+  let doc = new JSDOM(text).window.document;
+  let accordion1aData = Array.from(doc.querySelectorAll(".product-form-details")).map(
+    (detail) => detail.innerText
+  );
+  let tableData = doc.querySelector("#accordion-3a table")
 
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  let csvContent = accordion1aData.join("\t") + '\t' + tableData + "\n";
+  return csvContent
 }
 
 start();
