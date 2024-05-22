@@ -1,7 +1,7 @@
 const fs = require("fs");
 const JSDOM = require("jsdom").JSDOM;
 const config = require("./config.js");
-const IDs = fs.readFileSync(config.DATA_PATH, "utf-8").split("\n");
+const IDs = fs.readFileSync(config.path.data, "utf-8").split("\n");
 
 async function start() {
   const promises = [];
@@ -52,7 +52,7 @@ async function handleServerError(i, retryCount) {
 
 function extractDataThenContinue(i, text) {
   let outputData = cleanHtml(text);
-  fs.appendFileSync("result.html", outputData);
+  fs.appendFileSync(config.path.output, outputData);
   recurse_request((i += config.THREAD_COUNT));
 }
 

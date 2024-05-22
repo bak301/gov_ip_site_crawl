@@ -1,7 +1,12 @@
 const config = {
     BASE_URL : "http://wipopublish.ipvietnam.gov.vn/wopublish-search/public/ajax/detail/trademarks?id=",
-    DATA_PATH : "ID_Trademark.csv",
+    path : {
+     data : "ID_Trademark.csv",
+     output : "result.txt"
+    },
     RETRY_LIMIT : 3,
+    TOTAL_REQUEST : 5,
+    THREAD_COUNT : 1,
     delay : {
         BETWEEN_REQUEST : 200
     },
