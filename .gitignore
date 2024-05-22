@@ -128,3 +128,9 @@ dist
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
+
+# data file
+.csv
+error.html
+result.html
+package-lock.json
