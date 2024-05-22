@@ -130,14 +130,14 @@ function extractFromHTML(text) {
       return row.textContent;
     }
   });
-  let table = doc.querySelector("#accordion-3a table");
+  let table = doc.querySelector("#accordion-3a table tbody");
   let tableData = Array.from(table.querySelectorAll("tr"))
     .map((row) => {
       let columns = Array.from(row.querySelectorAll("td")).map((cell) =>
         cell.textContent.trim()
       );
       if (columns.length >= 3) {
-        let temp = columns[0];
+        let temp = columns[0];  
         columns[0] = columns[1];
         columns[1] = temp;
       }
