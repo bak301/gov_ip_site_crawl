@@ -3,7 +3,8 @@ const config = {
     path : {
      data : "ID_Trademark.csv",
      output : "result.txt",
-     error : "error.txt"
+     error : "error.txt",
+     log : "log.txt"
     },
     RETRY_LIMIT : 3,
     TOTAL_REQUEST : 5,
