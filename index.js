@@ -130,6 +130,8 @@ function extractFromHTML(text) {
       return row.textContent;
     }
   });
+  let imgURL = doc.querySelector('.product-form-detail img').getAttribute('src');
+  accordion1aData.unshift(imgURL)
   let table = doc.querySelector("#accordion-3a table tbody");
   let tableData = Array.from(table.querySelectorAll("tr"))
     .map((row) => {
