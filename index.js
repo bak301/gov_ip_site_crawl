@@ -132,7 +132,7 @@ function extractFromHTML(text) {
   });
 
   let imgURL = "no data !";
-  switch (config.DATA_TYPE) {
+  switch (config.DATA_TYPE.toUpperCase()) {
     case "TRADEMARK":
       imgURL = doc
         .querySelector(".product-form-detail img")
