@@ -130,8 +130,28 @@ function extractFromHTML(text) {
       return row.textContent;
     }
   });
-  let imgURL = doc.querySelector('.product-form-detail img').getAttribute('src');
-  accordion1aData.unshift(imgURL)
+
+  let imgURL = "no data !";
+  switch (config.DATA_TYPE) {
+    case "TRADEMARK":
+      imgURL = doc
+        .querySelector(".product-form-detail img")
+        .getAttribute("src");
+      break;
+
+    case "PATENT":
+      let imgTag = doc.getElementsByTagName("img")[0];
+
+      if (imgTag != undefined) {
+        imgURL = imgTag.getAttribute("src");
+      }
+      break;
+    default:
+      break;
+  }
+
+  accordion1aData.unshift(imgURL);
+
   let table = doc.querySelector("#accordion-3a table tbody");
   let tableData = Array.from(table.querySelectorAll("tr"))
     .map((row) => {
@@ -139,7 +159,7 @@ function extractFromHTML(text) {
         cell.textContent.trim()
       );
       if (columns.length >= 3) {
-        let temp = columns[0];  
+        let temp = columns[0];
         columns[0] = columns[1];
         columns[1] = temp;
       }
