@@ -115,7 +115,11 @@ function extractFromHTML(text) {
   let accordion1aData = Array.from(
     doc.querySelectorAll(".product-form-details")
   ).map((row, index) => {
-    if (index === 10) {
+    if (index === 6 ) {
+      console.log("LOGGING : " + row.textContent)
+      return row.textContent
+    } else 
+    if (index === 10 && config.DATA_TYPE == 'TRADEMARK') {
       let combinedText = Array.from(row.querySelectorAll(".row"))
         .map((childRow) => {
           let col2Text = childRow.querySelector(".col-md-2").textContent.trim();
