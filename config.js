@@ -4,15 +4,15 @@ const config = {
     DATA_TYPE : "TRADEMARK", // or "PATENT"
     path : {
      data : "ID_Trademark.csv",
-     output : "result.txt",
+     output : "16.09.2024.txt",
      error : "error.txt",
      log : "log.txt"
     },
-    RETRY_LIMIT : 15,
-    TOTAL_REQUEST : 13,
-    THREAD_COUNT : 13,
+    RETRY_LIMIT : 10,
+    TOTAL_REQUEST : 50,
+    THREAD_COUNT : 10,
     delay : {
-        BETWEEN_REQUEST : 2000
+        BETWEEN_REQUEST : 500
     },
     string : {
         INTERNAL_SERVER_ERROR : "An unexpected server error has occurred"
