@@ -1,18 +1,7 @@
 {
-  "name": "node_scrape_ip",
-  "version": "1.0.0",
-  "description": "hiep",
-  "main": "index.js",
-  "type": "commonjs",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "author": "kab",
-  "license": "ISC",
   "dependencies": {
-    "jsdom": "^24.0.0"
-  },
-  "devDependencies": {
-    "pdfreader": "^3.0.2"
+    "jsdom": "^26.1.0",
+    "p-limit": "^6.2.0",
+    "puppeteer": "^24.15.0"
   }
 }
