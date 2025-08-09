@@ -305,7 +305,7 @@ const config = {
   },
   THREAD_COUNT: 12, // Increased from 16 for better performance
   RETRY_LIMIT: 20, // Reduced from 30 for faster processing (global retry passes)
-  MAX_REATTEMPTS: 20, // Individual ID re-attempts before marking as failed
+  MAX_REATTEMPTS: 10, // Individual ID re-attempts before marking as failed
   MAX_CONCURRENT_REQUESTS: 8, // New: limit concurrent requests
   delay: {
     BETWEEN_REQUEST: 500, // Reduced delay
@@ -406,7 +406,14 @@ async function start() {
   // Wait for all initial threads to complete
   try {
     await Promise.all(promises);
-    // Initial processing completed in ${((Date.now() - startTime) / 1000).toFixed(2)}s
+    
+    // Additional wait to ensure all re-attempts are completed
+    while (scrapingState.processingIDs.size > 0) {
+      console.log(`⏳ Waiting for ${scrapingState.processingIDs.size} IDs to complete their re-attempts...`);
+      await utils.delay(5000); // Wait 5 seconds before checking again
+    }
+    
+    // Now all processing is truly complete
   } catch (error) {
     console.error(`❌ Error during initial processing:`, error);
   }
@@ -424,6 +431,7 @@ async function start() {
     retryIDs.forEach(id => {
       scrapingState.processingIDs.delete(id);
       scrapingState.markIDAsProcessing(id);
+      // Re-attempt counter will be reset when processing starts in recurse_request
     });
 
     const retryPromises = [];
@@ -573,12 +581,18 @@ function moveOldOutputs(outputDir, keep = 5) {
 
 // Enhanced main processing function with better error handling
 async function recurse_request(i, reattemptCount = 0) {
+  // Safety check to prevent runaway recursion
+  if (reattemptCount > config.MAX_REATTEMPTS * 2) {
+    console.warn(`⚠️ Excessive re-attempts detected for index ${i}, aborting...`);
+    return;
+  }
+  
   if (i >= IDs.length) {
     scrapingState.activeThreads--;
     
-    // Check if all processing is complete
-    if (scrapingState.activeThreads === 0) {
-      // All threads completed. Checking final status...
+    // Check if all processing is complete - but only if no IDs are still being processed
+    if (scrapingState.activeThreads === 0 && scrapingState.processingIDs.size === 0) {
+      // All threads completed AND no IDs are currently being processed
       checkProcessingComplete();
     }
     return;
@@ -589,19 +603,24 @@ async function recurse_request(i, reattemptCount = 0) {
   // Validate ID format
   if (!utils.isValidID(currentID)) {
     console.warn(`⚠️ Invalid ID format: ${currentID}, skipping...`);
-    await recurse_request(i + config.THREAD_COUNT, 0);
+    // Use setImmediate to prevent stack overflow
+    setImmediate(() => recurse_request(i + config.THREAD_COUNT, 0));
     return;
   }
 
   // Check if already processing or completed (skip for re-attempts)
   if (reattemptCount === 0 && (scrapingState.processingIDs.has(currentID) || scrapingState.completedIDs.has(currentID) || scrapingState.permanentlyFailedIDs.has(currentID))) {
-    await recurse_request(i + config.THREAD_COUNT, 0);
+    setImmediate(() => recurse_request(i + config.THREAD_COUNT, 0));
     return;
   }
 
   // Mark as processing and apply rate limiting (only on first attempt)
   if (reattemptCount === 0) {
     scrapingState.markIDAsProcessing(currentID);
+    // Reset re-attempt counter only when starting this ID for the first time in this retry pass
+    if (scrapingState.currentAttempt > 1) {
+      scrapingState.resetReattemptCount(currentID);
+    }
   }
   await utils.rateLimiter();
 
@@ -609,32 +628,54 @@ async function recurse_request(i, reattemptCount = 0) {
   const startTime = performance.now();
 
   try {
-    // Create timeout promise
-    const timeoutPromise = utils.createTimeoutPromise(config.timeout.REQUEST_TIMEOUT);
+    // Create robust fetch with timeout and abort controller
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+    }, config.timeout.REQUEST_TIMEOUT);
     
-    // Race between fetch and timeout
-    const response = await Promise.race([
-      fetch(url),
-      timeoutPromise
-    ]);
+    try {
+      // Fetch with abort signal
+      const response = await fetch(url, {
+        signal: controller.signal,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+      });
+      
+      clearTimeout(timeoutId);
+      
+      logJobDetails(i, response, IDs, startTime, reattemptCount);
 
-    logJobDetails(i, response, IDs, startTime, reattemptCount);
-
-    // Get response text regardless of status code - server might return data even with 500
-    const text = await response.text();
-    
-    // Check if we got usable data regardless of HTTP status
-    if (hasUsableData(text)) {
-      // Success! We got usable data even if server returned error status
-      scrapingState.resetReattemptCount(currentID);
-      extractDataThenContinue(i, text);
-    } else {
-      // No usable data found, treat as error
-      await handleServerError(i, reattemptCount, currentID);
+      // Get response text with additional timeout protection
+      const textController = new AbortController();
+      const textTimeoutId = setTimeout(() => {
+        textController.abort();
+      }, config.timeout.REQUEST_TIMEOUT);
+      
+      const text = await response.text();
+      clearTimeout(textTimeoutId);
+      
+      // Check if we got usable data regardless of HTTP status
+      if (hasUsableData(text)) {
+        // Success! We got usable data even if server returned error status
+        scrapingState.resetReattemptCount(currentID);
+        extractDataThenContinue(i, text);
+      } else {
+        // No usable data found, treat as error
+        await handleServerError(i, reattemptCount, currentID);
+      }
+    } catch (fetchError) {
+      clearTimeout(timeoutId);
+      throw fetchError;
     }
   } catch (error) {
     const errorMsg = error.message || 'Unknown error';
-    console.error(`❌ Error processing ID ${currentID}:`, errorMsg);
+    
+    // Don't log timeout errors as they're expected during heavy load
+    if (!errorMsg.includes('timeout') && !errorMsg.includes('aborted')) {
+      console.error(`❌ Error processing ID ${currentID}:`, errorMsg);
+    }
     
     // Log error details
     const errorLog = `Error for ID ${currentID}: ${errorMsg} at ${new Date().toISOString()}\n`;
@@ -720,16 +761,18 @@ async function handleServerError(i, reattemptCount, currentID) {
     scrapingState.incrementReattemptCount(currentID);
     const newReattemptCount = scrapingState.getReattemptCount(currentID);
     
-    // Calculate exponential backoff delay for re-attempts
+    // Calculate exponential backoff delay for re-attempts with maximum cap
     const baseDelay = config.delay.RETRY_DELAY_BASE;
     const backoffDelay = baseDelay * Math.pow(config.delay.RETRY_DELAY_MULTIPLIER, newReattemptCount - 1);
-    const jitteredDelay = backoffDelay + (Math.random() * 1000); // Add jitter
+    const maxDelay = 30000; // Cap at 30 seconds maximum
+    const cappedDelay = Math.min(backoffDelay, maxDelay);
+    const jitteredDelay = cappedDelay + (Math.random() * 1000); // Add jitter
     
-    // Wait before re-attempt with exponential backoff (no separate console log)
+    // Wait before re-attempt with capped exponential backoff
     await utils.delay(jitteredDelay);
     
-    // Re-attempt the same ID (same index i, don't advance)
-    await recurse_request(i, newReattemptCount);
+    // Re-attempt the same ID (same index i, don't advance) - use setImmediate to prevent stack overflow
+    setImmediate(() => recurse_request(i, newReattemptCount));
   } else {
     // Silently add to failed queue for next retry pass (no console log needed)
 
@@ -744,8 +787,8 @@ async function handleServerError(i, reattemptCount, currentID) {
       scrapingState.failedQueue.push(currentID);
     }
 
-    // Continue with next ID (advance index)
-    await recurse_request(i + config.THREAD_COUNT, 0);
+    // Continue with next ID (advance index) - use setImmediate to prevent stack overflow
+    setImmediate(() => recurse_request(i + config.THREAD_COUNT, 0));
   }
 }
 
@@ -800,8 +843,8 @@ function extractDataThenContinue(i, text) {
     scrapingState.failedQueue.push(currentID);
   }
 
-  // Continue with next ID
-  recurse_request(i + config.THREAD_COUNT, 0);
+  // Continue with next ID - use setImmediate to prevent stack overflow
+  setImmediate(() => recurse_request(i + config.THREAD_COUNT, 0));
 }
 
 // Enhanced logging with better formatting and performance tracking
@@ -1609,6 +1652,7 @@ async function simpleRetryLoop() {
     scrapingState.permanentlyFailedIDs.clear();
     scrapingState.processingIDs.clear();
     scrapingState.retryTracker.clear();
+    // Re-attempt counters will be reset per ID when processing starts
     scrapingState.activeThreads = config.THREAD_COUNT;
     
     // Rerun the main processing function
