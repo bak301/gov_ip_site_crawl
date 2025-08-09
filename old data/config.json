@@ -1,0 +1,31 @@
+{
+  "scraping": {
+    "threadCount": 10,
+    "retryLimit": 20,
+    "maxConcurrentRequests": 8,
+    "delays": {
+      "betweenRequests": 2000,
+      "retryDelayBase": 3000,
+      "retryDelayMultiplier": 1.5
+    },
+    "timeouts": {
+      "requestTimeout": 30000,
+      "totalTimeout": 7200000
+    }
+  },
+  "files": {
+    "inputFile": "ID.csv",
+    "failedIDsFile": "failed_ids.txt",
+    "keepOldOutputs": 5
+  },
+  "errorHandling": {
+    "enableDetailedLogging": true,
+    "enableProgressTracking": true,
+    "logProgressEvery": 10
+  },
+  "postProcessing": {
+    "enablePostCheck": true,
+    "maxPostCheckRetries": 3,
+    "postCheckBatchSize": 8
+  }
+}
