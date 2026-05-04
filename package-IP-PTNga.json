@@ -2,10 +2,11 @@
   "name": "wipo-scraper",
   "version": "2.0.0",
   "description": "Enhanced WIPO intellectual property data scraper",
-  "main": "index.js",
+  "main": "electron/main.js",
   "scripts": {
     "start": "node index.js",
-    "gui": "electron electron/main.js",
+    "gui": "electron .",
+    "gui:dev": "electron . --dev",
     "test": "node test_server.js",
     "recover": "node recover.js",
     "monitor": "node monitor.js",
@@ -14,15 +15,18 @@
     "continuous": "node continuous_retry.js",
     "retry": "node continuous_retry.js",
     "tm:search": "node tm_search_scraper.js",
+    "ipvietnam:monthly": "node scrape_ipvietnam_monthly_lookup.js",
     "lookup:gui": "electron electron/lookup-main.js"
   },
   "dependencies": {
+    "electron": "^31.7.7",
     "fetch-cookie": "^3.1.0",
     "jsdom": "^26.1.0",
     "p-limit": "^6.2.0",
     "puppeteer": "^24.15.0",
     "tough-cookie": "^6.0.0",
-    "undici": "^7.13.0"
+    "undici": "^7.13.0",
+    "x-data-spreadsheet": "^1.1.5"
   },
   "keywords": [
     "scraping",

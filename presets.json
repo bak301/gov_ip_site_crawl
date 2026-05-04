@@ -1,0 +1,54 @@
+{
+  "presets": [
+    {
+      "name": "Fast (High Performance)",
+      "THREAD_COUNT": 10,
+      "RETRY_LIMIT": 20,
+      "MAX_REATTEMPTS": 10,
+      "MAX_CONCURRENT_REQUESTS": 4,
+      "BETWEEN_REQUEST": 1000,
+      "RETRY_DELAY_BASE": 500,
+      "REQUEST_TIMEOUT": 30000
+    },
+    {
+      "name": "Balanced (Default)",
+      "THREAD_COUNT": 5,
+      "RETRY_LIMIT": 30,
+      "MAX_REATTEMPTS": 15,
+      "MAX_CONCURRENT_REQUESTS": 3,
+      "BETWEEN_REQUEST": 2000,
+      "RETRY_DELAY_BASE": 1000,
+      "REQUEST_TIMEOUT": 30000
+    },
+    {
+      "name": "Conservative (Safe Mode)",
+      "THREAD_COUNT": 3,
+      "RETRY_LIMIT": 50,
+      "MAX_REATTEMPTS": 20,
+      "MAX_CONCURRENT_REQUESTS": 2,
+      "BETWEEN_REQUEST": 3000,
+      "RETRY_DELAY_BASE": 2000,
+      "REQUEST_TIMEOUT": 45000
+    },
+    {
+      "name": "Oui Oui",
+      "THREAD_COUNT": 10,
+      "RETRY_LIMIT": 20,
+      "MAX_REATTEMPTS": 50,
+      "MAX_CONCURRENT_REQUESTS": 6,
+      "BETWEEN_REQUEST": 2000,
+      "RETRY_DELAY_BASE": 1000,
+      "REQUEST_TIMEOUT": 300000
+    },
+    {
+      "name": "abc",
+      "THREAD_COUNT": 4,
+      "RETRY_LIMIT": 33,
+      "MAX_REATTEMPTS": 15,
+      "MAX_CONCURRENT_REQUESTS": 4,
+      "BETWEEN_REQUEST": 500,
+      "RETRY_DELAY_BASE": 800,
+      "REQUEST_TIMEOUT": 333333
+    }
+  ]
+}

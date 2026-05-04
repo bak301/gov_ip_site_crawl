@@ -81,36 +81,6 @@ function promptUser(question) {
   });
 }
 
-function parsePresetIndexFromArgs() {
-  const eqArg = process.argv.find((arg) => String(arg).startsWith("--preset-index="));
-  if (eqArg) {
-    const value = Number.parseInt(eqArg.split("=")[1], 10);
-    return Number.isNaN(value) ? null : value;
-  }
-
-  const keyIndex = process.argv.findIndex((arg) => String(arg) === "--preset-index");
-  if (keyIndex >= 0 && keyIndex + 1 < process.argv.length) {
-    const value = Number.parseInt(String(process.argv[keyIndex + 1]), 10);
-    return Number.isNaN(value) ? null : value;
-  }
-
-  return null;
-}
-
-function getPresetByIndex(presetIndex) {
-  const data = loadPresets();
-  const presets = Array.isArray(data.presets) ? data.presets : [];
-  if (presets.length === 0) {
-    return null;
-  }
-
-  if (!Number.isInteger(presetIndex) || presetIndex < 1 || presetIndex > presets.length) {
-    return null;
-  }
-
-  return presets[presetIndex - 1];
-}
-
 // Display presets and get user selection
 async function promptPresetSelection() {
   const data = loadPresets();
@@ -194,6 +164,49 @@ function applyPresetToConfig(preset) {
   config.delay.BETWEEN_REQUEST = preset.BETWEEN_REQUEST;
   config.delay.RETRY_DELAY_BASE = preset.RETRY_DELAY_BASE;
   config.timeout.REQUEST_TIMEOUT = preset.REQUEST_TIMEOUT;
+}
+
+function getPresetSelectionFromArgs() {
+  const data = loadPresets();
+  const presets = data.presets || [];
+
+  if (presets.length === 0) {
+    return null;
+  }
+
+  const args = process.argv.slice(2);
+  let presetIndexValue = process.env.WIPO_PRESET_INDEX;
+  let presetNameValue = process.env.WIPO_PRESET_NAME;
+
+  for (const arg of args) {
+    if (arg.startsWith("--preset-index=")) {
+      presetIndexValue = arg.split("=")[1];
+    } else if (arg.startsWith("--preset-name=")) {
+      presetNameValue = arg.split("=")[1];
+    }
+  }
+
+  if (presetIndexValue !== undefined && presetIndexValue !== null && String(presetIndexValue).trim() !== "") {
+    const indexFromArg = parseInt(String(presetIndexValue).trim(), 10);
+    if (!Number.isNaN(indexFromArg)) {
+      const zeroBasedIndex = indexFromArg - 1;
+      if (zeroBasedIndex >= 0 && zeroBasedIndex < presets.length) {
+        return presets[zeroBasedIndex];
+      }
+    }
+  }
+
+  if (presetNameValue && String(presetNameValue).trim()) {
+    const requestedName = String(presetNameValue).trim().toLowerCase();
+    const matchedPreset = presets.find(
+      (preset) => String(preset.name || "").trim().toLowerCase() === requestedName
+    );
+    if (matchedPreset) {
+      return matchedPreset;
+    }
+  }
+
+  return null;
 }
 
 // Simple clean logging system
@@ -427,429 +440,6 @@ const outputFiles = {
   TRADEMARKS: path.join(baseOutputDir, `NH_WIPO_${todayDate}.txt`)
 };
 
-const outputJsonFiles = {
-  PATENTS: path.join(baseOutputDir, `SC_WIPO_${todayDate}.json`),
-  DESIGNS: path.join(baseOutputDir, `KD_WIPO_${todayDate}.json`),
-  TRADEMARKS: path.join(baseOutputDir, `NH_WIPO_${todayDate}.json`),
-};
-
-const TYPE_FIELD_LABELS = {
-  DESIGNS: [
-    "Loại đơn",
-    "(10) Số bằng và ngày cấp",
-    "Trạng thái",
-    "(180) Ngày hết hạn",
-    "(20) Số đơn và Ngày nộp đơn",
-    "(40) Số công bố và ngày công bố",
-    "(30) Chi tiết về dữ liệu ưu tiên",
-    "(51/52) Phân loại Locarno",
-    "(71/73) Chủ đơn/Chủ bằng",
-    "(72) Tác giả kiểu dáng",
-    "(74) Đại diện SHCN",
-    "(73) Địa chỉ nhận thư",
-    "(54) Tên kiểu dáng",
-    "Tóm tắt",
-    "(53) Tổng số kiểu dáng",
-    "(55) Bản chất của kiểu dáng",
-    "(56) Yêu cầu bảo hộ kiểu dáng",
-  ],
-  TRADEMARKS: [
-    "Loại đơn",
-    "(100) Số bằng và ngày cấp",
-    "Trạng thái",
-    "(180) Ngày hết hạn",
-    "(200) Số đơn và Ngày nộp đơn",
-    "(400) Số công bố và ngày công bố",
-    "(541) Nhãn hiệu",
-    "(591) Màu sắc nhãn hiệu",
-    "(300) Chi tiết về dữ liệu ưu tiên",
-    "(511) Nhóm sản phẩm/dịch vụ",
-    "(531) Phân loại hình",
-    "(730) Chủ đơn/Chủ bằng",
-    "(740) Đại diện SHCN",
-    "(571) Nhãn hiệu",
-    "(566) Nhãn hiệu dịch thuật",
-    "(550) Kiểu của mẫu nhãn(hình/chữ/kết hợp)",
-    "(526) Yếu tố loại trừ",
-  ],
-  PATENTS: [
-    "Loại đơn",
-    "Loại đơn PCT",
-    "(10) Số bằng và ngày cấp",
-    "Trạng thái",
-    "(180) Ngày hết hạn",
-    "(20) Số đơn và Ngày nộp đơn",
-    "(40) Số công bố và ngày công bố",
-    "(86) Số đơn và ngày nộp đơn PCT",
-    "(87) Số công bố và ngày công bố đơn PCT",
-    "(85) Ngày vào pha quốc gia",
-    "(30) Chi tiết về dữ liệu ưu tiên",
-    "(51) Phân loại IPC",
-    "Phân loại CPC",
-    "(71/73) Chủ đơn/Chủ bằng",
-    "(72) Tác giả sáng chế",
-    "(74) Đại diện SHCN",
-    "(73) Địa chỉ nhận thư",
-    "(54) Tên",
-    "(57) Tóm tắt",
-    "(58) Các tài liệu đối chứng",
-  ],
-};
-
-const jsonOutputStore = {
-  PATENTS: [],
-  DESIGNS: [],
-  TRADEMARKS: [],
-};
-
-const jsonFlushCounters = {
-  PATENTS: 0,
-  DESIGNS: 0,
-  TRADEMARKS: 0,
-};
-
-function parseDateTag(raw) {
-  const value = String(raw || "").trim();
-  if (!value) return null;
-
-  const m = value.match(/(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})/);
-  if (!m) return null;
-
-  const day = Number.parseInt(m[1], 10);
-  const month = Number.parseInt(m[2], 10);
-  const year = Number.parseInt(m[3], 10);
-  if (Number.isNaN(day) || Number.isNaN(month) || Number.isNaN(year)) {
-    return null;
-  }
-
-  return {
-    raw: value,
-    day,
-    month,
-    year,
-    iso: `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`,
-  };
-}
-
-function extractTaggedDates(label, value) {
-  const text = String(value || "");
-  const matches = text.match(/\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{4}/g) || [];
-  return matches
-    .map((raw) => parseDateTag(raw))
-    .filter(Boolean)
-    .map((entry) => ({ field: label, ...entry }));
-}
-
-function stripViPrefix(value) {
-  return String(value || "")
-    .replace(/\(\s*VI\s*\)\s*/gi, "")
-    .replace(/\s{2,}/g, " ")
-    .trim();
-}
-
-function splitPipeListPreserveOrder(value) {
-  return String(value || "")
-    .split(" | ")
-    .map((s) => stripViPrefix(s))
-    .filter(Boolean);
-}
-
-function parseClassificationList(value) {
-  return splitPipeListPreserveOrder(value).map((entry, index) => {
-    const match = entry.match(/^(.*?)\s*\(([^)]+)\)\s*$/);
-    if (!match) {
-      return {
-        order: index + 1,
-        raw: entry,
-        code: entry,
-        version: "",
-      };
-    }
-
-    return {
-      order: index + 1,
-      raw: entry,
-      code: match[1].trim(),
-      version: match[2].trim(),
-    };
-  });
-}
-
-function splitNumberAndDate(value) {
-  const text = String(value || "").trim();
-  if (!text) {
-    return { raw: text, number: "", date_text: "", date: null };
-  }
-
-  // Use the last dd/mm/yyyy-like token as the field date and keep remaining text as number/code.
-  const allDateMatches = text.match(/\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{4}/g) || [];
-  const datePart = allDateMatches.length > 0 ? allDateMatches[allDateMatches.length - 1] : "";
-  const taggedDate = parseDateTag(datePart);
-
-  let numberPart = text;
-  if (datePart) {
-    const idx = numberPart.lastIndexOf(datePart);
-    if (idx >= 0) {
-      numberPart = `${numberPart.slice(0, idx)}${numberPart.slice(idx + datePart.length)}`;
-    }
-  }
-
-  numberPart = numberPart
-    .replace(/[|/\-:,;]+\s*$/, "")
-    .replace(/\s{2,}/g, " ")
-    .trim();
-
-  return {
-    raw: text,
-    number: numberPart,
-    date_text: datePart,
-    date: taggedDate,
-  };
-}
-
-function parsePriorityDetails(value) {
-  const rows = String(value || "")
-    .split("<lf>")
-    .map((x) => x.trim())
-    .filter(Boolean);
-
-  const normalizedRows = rows.length > 0 ? rows : [String(value || "").trim()].filter(Boolean);
-
-  return normalizedRows.map((row, index) => {
-    const parsed = splitNumberAndDate(stripViPrefix(row));
-    const priorityDate = parsed.date
-      ? {
-        raw: parsed.date.raw,
-        day: parsed.date.day,
-        month: parsed.date.month,
-        year: parsed.date.year,
-      }
-      : null;
-
-    return {
-      order: index + 1,
-      raw: row,
-      priority_no: parsed.number,
-      priority_date_text: parsed.date_text,
-      priority_date: priorityDate,
-    };
-  });
-}
-
-function parseNamedAddressList(value, role) {
-  return splitPipeListPreserveOrder(value).map((entry, index) => {
-    const separatorIndex = entry.indexOf(":");
-    const name = separatorIndex >= 0 ? entry.slice(0, separatorIndex).trim() : entry;
-    const address = separatorIndex >= 0 ? entry.slice(separatorIndex + 1).trim() : "";
-
-    if (role === "representative") {
-      return {
-        order: index + 1,
-        raw: entry,
-        representative_name: stripViPrefix(name),
-        representative_address: stripViPrefix(address),
-      };
-    }
-
-    return {
-      order: index + 1,
-      raw: entry,
-      name: stripViPrefix(name),
-      address: stripViPrefix(address),
-    };
-  });
-}
-
-function splitApplicantsWithOrder(rawApplicants) {
-  const items = splitPipeListPreserveOrder(rawApplicants);
-
-  return items.map((entry, index) => {
-    const separatorIndex = entry.indexOf(":");
-    if (separatorIndex < 0) {
-      return {
-        order: index + 1,
-        raw: entry,
-        applicant_name: entry,
-        applicant_address: "",
-      };
-    }
-
-    const name = entry.slice(0, separatorIndex).trim();
-    const address = entry.slice(separatorIndex + 1).trim();
-    return {
-      order: index + 1,
-      raw: entry,
-      applicant_name: stripViPrefix(name),
-      applicant_address: stripViPrefix(address),
-    };
-  });
-}
-
-function splitPeopleWithOrder(rawPeople) {
-  const items = splitPipeListPreserveOrder(rawPeople);
-
-  return items.map((entry, index) => {
-    const separatorIndex = entry.indexOf(":");
-    if (separatorIndex < 0) {
-      return {
-        order: index + 1,
-        raw: entry,
-        inventor_name: entry,
-        inventor_address: "",
-      };
-    }
-
-    const name = entry.slice(0, separatorIndex).trim();
-    const address = entry.slice(separatorIndex + 1).trim();
-    return {
-      order: index + 1,
-      raw: entry,
-      inventor_name: stripViPrefix(name),
-      inventor_address: stripViPrefix(address),
-    };
-  });
-}
-
-function extractCanonicalApplicationNo(value) {
-  const text = String(value || "").toUpperCase();
-  const match = text.match(/([1-4]-\d{4}-\d{4,})/);
-  return match ? match[1] : "";
-}
-
-function parseDiaryOrdered(rawDiary) {
-  const rows = String(rawDiary || "")
-    .split("<lf>")
-    .map((row) => row.trim())
-    .filter(Boolean);
-
-  return rows.map((row) => {
-    const cols = row.split("<t>").map((x) => String(x || "").trim());
-    const dateText = cols[0] || "";
-    const description = cols[1] || "";
-    const extras = cols.slice(2).filter(Boolean);
-    return {
-      date_text: dateText,
-      date: parseDateTag(dateText),
-      description,
-      extra: extras,
-    };
-  });
-}
-
-function buildStructuredJsonRecord(type, id, outputData) {
-  const labels = TYPE_FIELD_LABELS[type] || [];
-  const parts = String(outputData || "").replace(/\n+$/, "").split("\t");
-  if (parts.length < 2) {
-    return null;
-  }
-
-  const image = parts[0] || "";
-  const fieldValues = parts.slice(1, 1 + labels.length);
-  const diaryRaw = parts.slice(1 + labels.length).join("\t");
-
-  const fields = {};
-  const dates = [];
-  for (let i = 0; i < labels.length; i += 1) {
-    const label = labels[i];
-    const value = fieldValues[i] || "";
-    fields[label] = stripViPrefix(value);
-    dates.push(...extractTaggedDates(label, value));
-  }
-
-  const applicantRaw =
-    fields["(71/73) Chủ đơn/Chủ bằng"] || fields["(730) Chủ đơn/Chủ bằng"]
-  ;
-  const applicants = splitPipeListPreserveOrder(applicantRaw);
-  const applicants_ordered = splitApplicantsWithOrder(applicantRaw);
-
-  const grantNumberDate = splitNumberAndDate(fields["(10) Số bằng và ngày cấp"] || fields["(100) Số bằng và ngày cấp"]);
-  const applicationNumberDate = splitNumberAndDate(fields["(20) Số đơn và Ngày nộp đơn"] || fields["(200) Số đơn và Ngày nộp đơn"]);
-  applicationNumberDate.application_no = extractCanonicalApplicationNo(applicationNumberDate.number || applicationNumberDate.raw);
-  const publicationNumberDate = splitNumberAndDate(fields["(40) Số công bố và ngày công bố"] || fields["(400) Số công bố và ngày công bố"]);
-  const pctApplicationNumberDate = splitNumberAndDate(fields["(86) Số đơn và ngày nộp đơn PCT"]);
-  const pctPublicationNumberDate = splitNumberAndDate(fields["(87) Số công bố và ngày công bố đơn PCT"]);
-  const nationalPhaseEntryDate = parseDateTag(fields["(85) Ngày vào pha quốc gia"] || "");
-  const priorityDetails = parsePriorityDetails(fields["(30) Chi tiết về dữ liệu ưu tiên"] || fields["(300) Chi tiết về dữ liệu ưu tiên"]);
-  const ipcClassifications = parseClassificationList(fields["(51) Phân loại IPC"]);
-  const cpcClassifications = parseClassificationList(fields["Phân loại CPC"]);
-  const representativesOrdered = parseNamedAddressList(fields["(74) Đại diện SHCN"] || fields["(740) Đại diện SHCN"], "representative");
-  const title = stripViPrefix(fields["(54) Tên"] || fields["(54) Tên kiểu dáng"] || fields["(571) Nhãn hiệu"]);
-  const abstract = stripViPrefix(fields["(57) Tóm tắt"] || fields["Tóm tắt"] || "");
-
-  const splitFields = {
-    grant_number_date: grantNumberDate,
-    status: String(fields["Trạng thái"] || "").trim(),
-    expiry_date: parseDateTag(fields["(180) Ngày hết hạn"] || ""),
-    application_number_date: applicationNumberDate,
-    publication_number_date: publicationNumberDate,
-    pct_application_number_date: pctApplicationNumberDate,
-    pct_publication_number_date: pctPublicationNumberDate,
-    national_phase_entry_date: nationalPhaseEntryDate,
-    priority_details: priorityDetails,
-    ipc_classifications: ipcClassifications,
-    cpc_classifications: cpcClassifications,
-    representatives_ordered: representativesOrdered,
-    title,
-    abstract,
-  };
-
-  const inventorRaw =
-    fields["(72) Tác giả sáng chế"] || fields["(72) Tác giả kiểu dáng"]
-  ;
-  const inventors = splitPipeListPreserveOrder(inventorRaw);
-  const inventors_ordered = splitPeopleWithOrder(inventorRaw);
-
-  const diary = parseDiaryOrdered(diaryRaw);
-  for (const entry of diary) {
-    if (entry.date) {
-      dates.push({ field: "Tiến trình", ...entry.date });
-    }
-  }
-
-  return {
-    id,
-    type,
-    image,
-    fields,
-    split_fields: splitFields,
-    applicants,
-    applicants_ordered,
-    inventors,
-    inventors_ordered,
-    diary,
-    dates,
-    scraped_at: new Date().toISOString(),
-  };
-}
-
-function initializeJsonOutputs() {
-  for (const type of Object.keys(outputJsonFiles)) {
-    const filePath = outputJsonFiles[type];
-    if (!fs.existsSync(filePath)) {
-      jsonOutputStore[type] = [];
-      continue;
-    }
-
-    try {
-      const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
-      jsonOutputStore[type] = Array.isArray(parsed) ? parsed : [];
-    } catch (_error) {
-      jsonOutputStore[type] = [];
-    }
-  }
-}
-
-function flushJsonOutput(type) {
-  const filePath = outputJsonFiles[type];
-  fs.writeFileSync(filePath, JSON.stringify(jsonOutputStore[type], null, 2), "utf-8");
-}
-
-function flushAllJsonOutputs() {
-  for (const type of Object.keys(outputJsonFiles)) {
-    flushJsonOutput(type);
-  }
-}
-
 // === Global tracking file for all scraped data with run date ===
 const globalTrackingFile = path.join(__dirname, "WIPO_Global_Tracking.txt");
 
@@ -987,7 +577,6 @@ const config = {
 
 // === Initialize output structure and check for existing data ===
 const outputFileStructure = loadAlreadyScrapedIDs();
-initializeJsonOutputs();
 
 // === Load IDs with deduplication and filter out already scraped ones ===
 let allIDs = fs
@@ -1249,9 +838,6 @@ function generateFinalReport() {
   ].join('\n');
   
   fs.writeFileSync(reportPath, reportContent);
-
-  // Persist JSON outputs at end of run.
-  flushAllJsonOutputs();
 }
 
 // Function to print final statistics (legacy function for compatibility)
@@ -1560,16 +1146,6 @@ function extractDataThenContinue(i, text) {
     // Write to type-specific file
     const typeSpecificFile = outputFiles[type];
     fs.appendFileSync(typeSpecificFile, formattedData);
-
-    // Write structured JSON output for GUI/data post-processing.
-    const structured = buildStructuredJsonRecord(type, currentID, outputData);
-    if (structured) {
-      jsonOutputStore[type].push(structured);
-      jsonFlushCounters[type] += 1;
-      if (jsonFlushCounters[type] % 200 === 0) {
-        flushJsonOutput(type);
-      }
-    }
     
     // Write to global tracking file with run date
     writeToGlobalTracking(currentID, type, outputData);
@@ -2470,23 +2046,8 @@ async function simpleRetryLoop() {
 // Enhanced main function with comprehensive error handling
 async function main() {
   try {
-    // Step 1: Select preset from CLI when provided (GUI mode), otherwise use interactive prompt.
-    const cliPresetIndex = parsePresetIndexFromArgs();
-    let selectedPreset = null;
-
-    if (cliPresetIndex !== null) {
-      selectedPreset = getPresetByIndex(cliPresetIndex);
-      if (!selectedPreset) {
-        console.warn(`⚠️ Invalid --preset-index=${cliPresetIndex}. Falling back to preset #1.`);
-        selectedPreset = getPresetByIndex(1);
-      }
-      if (!selectedPreset) {
-        throw new Error("No presets available in presets.json");
-      }
-      console.log(`\x1b[32m✓ Selected preset from CLI: ${selectedPreset.name}\x1b[0m\n`);
-    } else {
-      selectedPreset = await promptPresetSelection();
-    }
+    // Step 1: Use CLI/env preset when provided; otherwise keep interactive flow
+    const selectedPreset = getPresetSelectionFromArgs() || await promptPresetSelection();
     
     // Step 2: Apply preset to config
     applyPresetToConfig(selectedPreset);
