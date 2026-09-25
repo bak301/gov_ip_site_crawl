@@ -14,15 +14,21 @@
     "continuous": "node continuous_retry.js",
     "retry": "node continuous_retry.js",
     "tm:search": "node tm_search_scraper.js",
-    "lookup:gui": "electron electron/lookup-main.js"
+    "lookup:gui": "electron electron/lookup-main.js",
+    "db:import": "node import_tracking_to_sqlite.js"
   },
   "dependencies": {
+    "exceljs": "^4.4.0",
     "fetch-cookie": "^3.1.0",
+    "image-size": "^2.0.2",
     "jsdom": "^26.1.0",
     "p-limit": "^6.2.0",
     "puppeteer": "^24.15.0",
     "tough-cookie": "^6.0.0",
     "undici": "^7.13.0"
+  },
+  "devDependencies": {
+    "electron": "^41.7.1"
   },
   "keywords": [
     "scraping",

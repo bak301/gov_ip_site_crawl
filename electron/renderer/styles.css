@@ -91,7 +91,7 @@ body {
 }
 
 .output-row {
-  grid-template-columns: auto 220px auto 1fr auto auto;
+  grid-template-columns: auto 220px auto 1fr auto auto auto auto;
   margin-bottom: 10px;
 }
 
@@ -135,6 +135,17 @@ body {
   border-color: var(--line);
   background: #fff;
   color: var(--ink);
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+#toggleDeleteModeButton.active {
+  border-color: #d24b3a;
+  background: #fdebe4;
+  color: #9a3c1b;
 }
 
 #copyAllOutputButton.state-success {
@@ -210,6 +221,84 @@ body {
   font-size: 12px;
   white-space: nowrap;
   vertical-align: top;
+}
+
+#outputTable td.thumbnail-cell {
+  text-align: center;
+  white-space: normal;
+  vertical-align: middle;
+}
+
+#outputTable .thumbnail-img {
+  max-width: 96px;
+  max-height: 96px;
+  display: block;
+  margin: 0 auto;
+  border-radius: 4px;
+  border: 1px solid #e7ddd2;
+  background: #fff;
+}
+
+#outputTable .thumbnail-placeholder {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+#outputTable .thumbnail-img {
+  cursor: zoom-in;
+}
+
+.image-preview-popup {
+  display: none;
+  position: fixed;
+  z-index: 1000;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px;
+  box-shadow: 0 12px 32px rgba(20, 20, 20, 0.25);
+  pointer-events: none;
+}
+
+.image-preview-popup img {
+  display: block;
+  max-width: 320px;
+  max-height: 320px;
+  object-fit: contain;
+}
+
+#outputTable td.delete-cell {
+  text-align: center;
+  vertical-align: middle;
+  padding: 2px 4px;
+}
+
+#outputTable .row-delete-btn {
+  border: none;
+  background: transparent;
+  cursor: not-allowed;
+  font-size: 15px;
+  line-height: 1;
+  padding: 4px 6px;
+  border-radius: 6px;
+  opacity: 0.3;
+  pointer-events: none;
+  transition: opacity 150ms ease, background-color 150ms ease;
+}
+
+#outputTable.delete-mode-active .row-delete-btn {
+  cursor: pointer;
+  opacity: 1;
+  pointer-events: auto;
+  color: #c0392b;
+}
+
+#outputTable.delete-mode-active .row-delete-btn:hover {
+  background: #fdebe4;
+}
+
+#outputTable tr.row-deleting {
+  opacity: 0.4;
 }
 
 #inputTextArea {

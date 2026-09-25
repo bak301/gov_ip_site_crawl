@@ -11,9 +11,12 @@ contextBridge.exposeInMainWorld("wipoGui", {
   listOutputDates: () => ipcRenderer.invoke("output:dates"),
   listOutputFiles: (payload) => ipcRenderer.invoke("output:files", payload),
   readOutputFile: (payload) => ipcRenderer.invoke("output:read", payload),
+  readLocalImage: (payload) => ipcRenderer.invoke("output:readLocalImage", payload),
   listInputFiles: () => ipcRenderer.invoke("input:files"),
   readInputFile: (payload) => ipcRenderer.invoke("input:read", payload),
   writeInputFile: (payload) => ipcRenderer.invoke("input:write", payload),
+  deleteEntries: (payload) => ipcRenderer.invoke("entries:delete", payload),
+  exportExcel: (payload) => ipcRenderer.invoke("output:exportExcel", payload),
   onRunLog: (handler) => {
     const listener = (_event, payload) => handler(payload);
     ipcRenderer.on("run:log", listener);

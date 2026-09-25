@@ -59,8 +59,9 @@ function startMonthlyScrapeProcess() {
 
   const child = spawn(process.execPath, args, {
     cwd: ROOT_DIR,
-    windowsHide: true,
+    windowsHide: false,
     stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
   });
 
   scrapeControl.running = true;
@@ -503,6 +504,23 @@ function normalizeFolderNameFromTitle(title) {
   return sanitizeFilePart(title || "UNTITLED_SOURCE_ENTRY") || "UNTITLED_SOURCE_ENTRY";
 }
 
+function formatRunTimestamp(date = new Date()) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  const hh = String(date.getHours()).padStart(2, "0");
+  const mm = String(date.getMinutes()).padStart(2, "0");
+  const ss = String(date.getSeconds()).padStart(2, "0");
+  return `${y}.${m}.${d} ${hh}-${mm}-${ss}`;
+}
+
+function buildMatchKey(match) {
+  const soDon = normalizeAppNo(match && match.so_don ? match.so_don : "");
+  const title = String(match && match.source_entry_title ? match.source_entry_title : "").trim();
+  const pdfUrl = String(match && match.so_bang_pdf_url ? match.so_bang_pdf_url : "").trim();
+  return `${soDon}|${title}|${pdfUrl}`;
+}
+
 function safeUnlink(filePath) {
   try {
     if (fs.existsSync(filePath)) {
@@ -630,9 +648,11 @@ function buildMatches({ sourceRows, selectedTitles, manualAppNos, lookupMap }) {
       client: lookup ? lookup.client : "",
       applicantName: lookup ? lookup.applicantName : "",
       status: lookup ? lookup.status : "",
+      lookupMatched: Boolean(lookup),
     };
 
     match.outputFileName = buildOutputFileName(match);
+    match.matchKey = buildMatchKey(match);
     matches.push(match);
   }
 
@@ -785,6 +805,95 @@ async function downloadPdfViaPuppeteer(url, filePath, { headless = true, timeout
   throw lastError || new Error("Chrome fallback failed.");
 }
 
+function normalizeCandidateUrl(rawUrl, baseUrl = "") {
+  const value = String(rawUrl || "").trim();
+  if (!value) {
+    return "";
+  }
+
+  try {
+    return new URL(value, baseUrl || undefined).toString();
+  } catch (_error) {
+    return "";
+  }
+}
+
+async function discoverPdfUrlFromSourceEntry(match, { headless = true, timeoutMs = 60000 } = {}) {
+  const sourceEntryUrl = String(match && match.source_entry_url ? match.source_entry_url : "").trim();
+  if (!sourceEntryUrl) {
+    return "";
+  }
+
+  const executablePath = findChromeExecutable();
+  if (!executablePath) {
+    throw new Error("Could not find Chrome or Edge executable on this machine.");
+  }
+
+  let browser = null;
+  try {
+    browser = await puppeteer.launch({
+      headless,
+      executablePath,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
+
+    const page = await browser.newPage();
+    await page.setUserAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    );
+
+    await page.goto(sourceEntryUrl, {
+      waitUntil: "networkidle2",
+      timeout: timeoutMs,
+    });
+
+    const extracted = await page.evaluate(() => {
+      const values = [];
+
+      document.querySelectorAll("a[href]").forEach((el) => values.push(el.getAttribute("href") || ""));
+      document.querySelectorAll("iframe[src]").forEach((el) => values.push(el.getAttribute("src") || ""));
+      document.querySelectorAll("embed[src]").forEach((el) => values.push(el.getAttribute("src") || ""));
+      document.querySelectorAll("object[data]").forEach((el) => values.push(el.getAttribute("data") || ""));
+
+      return values;
+    });
+
+    const baseUrl = page.url();
+    const normalizedCandidates = Array.from(new Set(
+      (Array.isArray(extracted) ? extracted : [])
+        .map((value) => normalizeCandidateUrl(value, baseUrl))
+        .filter(Boolean)
+    ));
+
+    const documentPdfCandidates = normalizedCandidates.filter((url) => {
+      const lower = String(url || "").toLowerCase();
+      return lower.includes("/documents/") && lower.includes(".pdf");
+    });
+
+    const soBang = String(match && match.so_bang ? match.so_bang : "").trim().toLowerCase();
+    if (soBang) {
+      const exactBySoBang = documentPdfCandidates.find((url) => String(url).toLowerCase().includes(`/${soBang}.pdf`));
+      if (exactBySoBang) {
+        return exactBySoBang;
+      }
+    }
+
+    if (documentPdfCandidates.length > 0) {
+      return documentPdfCandidates[0];
+    }
+
+    return "";
+  } finally {
+    if (browser) {
+      try {
+        await browser.close();
+      } catch (_error) {
+        // Best effort cleanup.
+      }
+    }
+  }
+}
+
 function psSingleQuoted(value) {
   return `'${String(value || "").replace(/'/g, "''")}'`;
 }
@@ -935,73 +1044,121 @@ function resolveExistingDownloadedFile(targetDir, destination, match) {
 }
 
 async function tryDownloadWithMethods(match, destination, options) {
-  const methods = [
-    {
-      key: "fetch",
-      logType: "try-fetch",
-      run: async () => {
-        await retryOperation(
-          () => downloadPdfViaFetch(match.so_bang_pdf_url, destination, 45000),
-          2,
-          60000,
-          "Fetch"
-        );
+  async function runMethodsForUrl(pdfUrl, attemptLabel) {
+    const methods = [
+      {
+        key: "fetch",
+        logType: "try-fetch",
+        run: async () => {
+          await retryOperation(
+            () => downloadPdfViaFetch(pdfUrl, destination, 45000),
+            2,
+            60000,
+            "Fetch"
+          );
+        },
       },
-    },
-    {
-      key: "powershell-fallback",
-      logType: "try-powershell",
-      run: async () => {
-        await retryOperation(
-          () => downloadPdfViaPowerShell(match.so_bang_pdf_url, destination, 90000),
-          2,
-          100000,
-          "PowerShell fallback"
-        );
+      {
+        key: "powershell-fallback",
+        logType: "try-powershell",
+        run: async () => {
+          await retryOperation(
+            () => downloadPdfViaPowerShell(pdfUrl, destination, 90000),
+            2,
+            100000,
+            "PowerShell fallback"
+          );
+        },
       },
-    },
-    {
-      key: "chrome-fallback",
-      logType: "try-chrome",
-      run: async () => {
-        await retryOperation(
-          () =>
-            downloadPdfViaPuppeteer(match.so_bang_pdf_url, destination, {
-              headless: options.headlessBrowser !== false,
-              timeoutMs: 60000,
-            }),
-          2,
-          90000,
-          "Chrome fallback"
-        );
+      {
+        key: "chrome-fallback",
+        logType: "try-chrome",
+        run: async () => {
+          await retryOperation(
+            () =>
+              downloadPdfViaPuppeteer(pdfUrl, destination, {
+                headless: options.headlessBrowser !== false,
+                timeoutMs: 60000,
+              }),
+            2,
+            90000,
+            "Chrome fallback"
+          );
+        },
       },
-    },
-  ];
+    ];
 
-  const errors = [];
+    const errors = [];
 
-  for (const method of methods) {
-    safeUnlink(destination);
-    emitDownloadLog(method.logType, match, {
-      filePath: destination,
-      url: match.so_bang_pdf_url,
-    });
-
-    try {
-      await method.run();
-      const check = validatePdfFile(destination);
-      if (!check.ok) {
-        safeUnlink(destination);
-        throw new Error(`Output invalid: ${check.reason}`);
-      }
-      return { ok: true, via: method.key };
-    } catch (error) {
-      errors.push(`${method.key}: ${error.message || String(error)}`);
+    for (const method of methods) {
       safeUnlink(destination);
+      emitDownloadLog(method.logType, match, {
+        filePath: destination,
+        url: pdfUrl,
+        attempt: attemptLabel,
+      });
+
+      try {
+        await method.run();
+        const check = validatePdfFile(destination);
+        if (!check.ok) {
+          safeUnlink(destination);
+          throw new Error(`Output invalid: ${check.reason}`);
+        }
+        return { ok: true, via: method.key };
+      } catch (error) {
+        errors.push(`${method.key}: ${error.message || String(error)}`);
+        safeUnlink(destination);
+      }
     }
+
+    return { ok: false, error: errors.join(" | ") };
   }
 
-  return { ok: false, error: errors.join(" | ") };
+  const initialUrl = String(match && match.so_bang_pdf_url ? match.so_bang_pdf_url : "").trim();
+  const initialAttempt = await runMethodsForUrl(initialUrl, "source-row-pdf-url");
+  if (initialAttempt.ok) {
+    return initialAttempt;
+  }
+
+  const sourceEntryUrl = String(match && match.source_entry_url ? match.source_entry_url : "").trim();
+  if (!sourceEntryUrl) {
+    return initialAttempt;
+  }
+
+  try {
+    const discoveredUrl = await discoverPdfUrlFromSourceEntry(match, {
+      headless: options.headlessBrowser !== false,
+      timeoutMs: 60000,
+    });
+
+    const normalizedInitialUrl = normalizeCandidateUrl(initialUrl);
+    const normalizedDiscoveredUrl = normalizeCandidateUrl(discoveredUrl);
+    if (!normalizedDiscoveredUrl || normalizedDiscoveredUrl === normalizedInitialUrl) {
+      return initialAttempt;
+    }
+
+    emitDownloadLog("retry-alt-url", match, {
+      filePath: destination,
+      url: normalizedDiscoveredUrl,
+      sourceUrl: sourceEntryUrl,
+    });
+
+    const discoveredAttempt = await runMethodsForUrl(normalizedDiscoveredUrl, "source-entry-discovered-pdf-url");
+    if (discoveredAttempt.ok) {
+      return discoveredAttempt;
+    }
+
+    return {
+      ok: false,
+      error: `${initialAttempt.error} | source-entry-url: ${sourceEntryUrl} | discovered-url-failed: ${discoveredAttempt.error}`,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: `${initialAttempt.error} | source-entry-url: ${sourceEntryUrl} | discover-pdf-url-failed: ${error.message || String(error)}`,
+    };
+  }
 }
 
 async function runWithConcurrency(items, worker, concurrency, shouldStop) {
@@ -1037,7 +1194,29 @@ async function runWithConcurrency(items, worker, concurrency, shouldStop) {
   return results;
 }
 
-async function downloadMatches({ sourceFileName, selectedTitles, manualAppNos, headlessBrowser = true, downloadDir = "" }) {
+function copyToAggregateFolder(sourceFilePath, aggregateDir, preferredName = "") {
+  fs.mkdirSync(aggregateDir, { recursive: true });
+
+  const parsed = path.parse(String(preferredName || path.basename(sourceFilePath || "file.pdf")));
+  const base = sanitizeFilePart(parsed.name || "file") || "file";
+  const ext = (parsed.ext || ".pdf").toLowerCase();
+
+  let index = 0;
+  while (index < 1000) {
+    const suffix = index === 0 ? "" : `__${String(index).padStart(2, "0")}`;
+    const fileName = `${base}${suffix}${ext}`;
+    const targetPath = path.join(aggregateDir, fileName);
+    if (!fs.existsSync(targetPath)) {
+      fs.copyFileSync(sourceFilePath, targetPath);
+      return targetPath;
+    }
+    index += 1;
+  }
+
+  throw new Error("Could not allocate aggregate destination file name.");
+}
+
+async function downloadMatches({ sourceFileName, selectedTitles, manualAppNos, selectedMatchKeys, headlessBrowser = true, downloadDir = "" }) {
   const options = { headlessBrowser };
   if (downloadControl.running) {
     return { ok: false, error: "A download job is already running." };
@@ -1050,12 +1229,20 @@ async function downloadMatches({ sourceFileName, selectedTitles, manualAppNos, h
   const lookupRows = loadLookupRows();
   const lookupMap = buildLookupMap(lookupRows);
   const built = buildMatches({ sourceRows, selectedTitles, manualAppNos, lookupMap });
-  const matches = built.matches;
+  const selectedMatchKeySet = new Set((selectedMatchKeys || []).map((x) => String(x || "").trim()).filter(Boolean));
+  const matches = selectedMatchKeySet.size > 0
+    ? built.matches.filter((match) => selectedMatchKeySet.has(String(match.matchKey || "")))
+    : built.matches;
 
   const selectedRoot = String(downloadDir || "").trim() || downloadRoot;
-  const outputDir = path.resolve(selectedRoot);
+  const runFolderName = formatRunTimestamp();
+  const outputDir = path.join(path.resolve(selectedRoot), runFolderName);
+  const aggregateDir = path.join(path.resolve(selectedRoot), "_aggregated_downloads");
   fs.mkdirSync(outputDir, { recursive: true });
+  fs.mkdirSync(aggregateDir, { recursive: true });
   const seenTargetPaths = new Set();
+  const aggregateCopyPaths = [];
+  const aggregateCopyErrors = [];
 
   let results = [];
   try {
@@ -1076,6 +1263,12 @@ async function downloadMatches({ sourceFileName, selectedTitles, manualAppNos, h
             reason: "duplicate-target-in-run",
             filePath: destination,
           });
+          try {
+            const aggregatePath = copyToAggregateFolder(destination, aggregateDir, path.basename(destination));
+            aggregateCopyPaths.push(aggregatePath);
+          } catch (copyError) {
+            aggregateCopyErrors.push(`${match.so_don}: ${copyError.message || String(copyError)}`);
+          }
           return { ok: true, skippedExisting: true, duplicateInRun: true, filePath: destination, match };
         }
         seenTargetPaths.add(dedupeKey);
@@ -1086,11 +1279,23 @@ async function downloadMatches({ sourceFileName, selectedTitles, manualAppNos, h
             reason: "already-downloaded",
             filePath: existingFilePath,
           });
+          try {
+            const aggregatePath = copyToAggregateFolder(existingFilePath, aggregateDir, path.basename(existingFilePath));
+            aggregateCopyPaths.push(aggregatePath);
+          } catch (copyError) {
+            aggregateCopyErrors.push(`${match.so_don}: ${copyError.message || String(copyError)}`);
+          }
           return { ok: true, skippedExisting: true, filePath: existingFilePath, match };
         }
 
         const downloaded = await tryDownloadWithMethods(match, destination, options);
         if (downloaded.ok) {
+          try {
+            const aggregatePath = copyToAggregateFolder(destination, aggregateDir, path.basename(destination));
+            aggregateCopyPaths.push(aggregatePath);
+          } catch (copyError) {
+            aggregateCopyErrors.push(`${match.so_don}: ${copyError.message || String(copyError)}`);
+          }
           emitDownloadLog("downloaded", match, {
             via: downloaded.via,
             filePath: destination,
@@ -1124,6 +1329,7 @@ async function downloadMatches({ sourceFileName, selectedTitles, manualAppNos, h
   return {
     ok: true,
     totalMatches: matches.length,
+    requestedMatches: built.matches.length,
     stats: built.stats,
     downloaded,
     downloadedNew,
@@ -1131,6 +1337,10 @@ async function downloadMatches({ sourceFileName, selectedTitles, manualAppNos, h
     failed,
     cancelled,
     outputDir,
+    runFolderName,
+    aggregateDir,
+    aggregateCopied: aggregateCopyPaths.length,
+    aggregateCopyErrors: aggregateCopyErrors.slice(0, 50),
     failures: results.filter((r) => !r.ok).slice(0, 50).map((r) => ({
       so_don: r.match.so_don,
       so_bang_pdf_url: r.match.so_bang_pdf_url,
@@ -1179,6 +1389,7 @@ ipcMain.handle("lookupgui:lookup-matches", (_event, payload) => {
       ok: true,
       matchCount: matches.length,
       stats: built.stats,
+      matches,
       preview: matches.slice(0, 400),
       truncated: matches.length > 400,
     };
@@ -1192,9 +1403,17 @@ ipcMain.handle("lookupgui:download-matches", async (_event, payload) => {
     const fileName = payload ? payload.fileName : "";
     const selectedTitles = payload && Array.isArray(payload.selectedTitles) ? payload.selectedTitles : [];
     const manualAppNos = payload && Array.isArray(payload.manualAppNos) ? payload.manualAppNos : [];
+    const selectedMatchKeys = payload && Array.isArray(payload.selectedMatchKeys) ? payload.selectedMatchKeys : [];
     const headlessBrowser = payload && payload.headlessBrowser === false ? false : true;
     const downloadDir = payload && payload.downloadDir ? String(payload.downloadDir) : "";
-    return await downloadMatches({ sourceFileName: fileName, selectedTitles, manualAppNos, headlessBrowser, downloadDir });
+    return await downloadMatches({
+      sourceFileName: fileName,
+      selectedTitles,
+      manualAppNos,
+      selectedMatchKeys,
+      headlessBrowser,
+      downloadDir,
+    });
   } catch (error) {
     return { ok: false, error: error.message || String(error) };
   }

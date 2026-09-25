@@ -2,6 +2,12 @@ const fs = require("fs");
 const path = require("path");
 const { JSDOM } = require("jsdom");
 const readline = require("readline");
+const {
+  normalizeMadridInput,
+  isMadridId,
+  parseMadridXml,
+  fetchMadridXml,
+} = require("./madrid_monitor");
 
 // Workaround for WIPO certificate-chain issues on some environments.
 // Set WIPO_ALLOW_INSECURE_TLS=0 to disable this behavior.
@@ -712,7 +718,7 @@ function splitPeopleWithOrder(rawPeople) {
 
 function extractCanonicalApplicationNo(value) {
   const text = String(value || "").toUpperCase();
-  const match = text.match(/([1-4]-\d{4}-\d{4,})/);
+  const match = text.match(/([1-4]-\d{4}-\d{4,}|5-\d{7})/);
   return match ? match[1] : "";
 }
 
@@ -744,8 +750,9 @@ function buildStructuredJsonRecord(type, id, outputData) {
   }
 
   const image = parts[0] || "";
-  const fieldValues = parts.slice(1, 1 + labels.length);
-  const diaryRaw = parts.slice(1 + labels.length).join("\t");
+  const recordType = parts[1] || "";
+  const fieldValues = parts.slice(2, 2 + labels.length);
+  const diaryRaw = parts.slice(2 + labels.length).join("\t");
 
   const fields = {};
   const dates = [];
@@ -809,6 +816,7 @@ function buildStructuredJsonRecord(type, id, outputData) {
   return {
     id,
     type,
+    record_type: stripViPrefix(recordType),
     image,
     fields,
     split_fields: splitFields,
@@ -875,7 +883,7 @@ function getTodayScrapedCount() {
     const allInputIDs = fs
       .readFileSync(config.path.data, "utf-8")
       .split("\n")
-      .map(id => id.trim())
+      .map(id => normalizeMadridInput(id)?.canonicalId || id.trim())
       .filter(Boolean);
     allInputIDs.forEach(id => inputIDs.add(id));
   } catch (error) {
@@ -919,7 +927,7 @@ function extractScrapedIDsFromFile(filePath) {
       
       for (const line of lines) {
         // Look for ID patterns in the content (format: 1-YYYY-XXXXX, 2-YYYY-XXXXX, etc.)
-        const idMatch = line.match(/(?:^|\W)([1-4]-\d{4}-\d{5})(?:\W|$)/);
+        const idMatch = line.match(/(?:^|\W)([1-4]-\d{4}-\d{5}|5-\d{7})(?:\W|$)/);
         if (idMatch) {
           scrapedIDs.add(idMatch[1]);
         }
@@ -993,12 +1001,21 @@ initializeJsonOutputs();
 let allIDs = fs
   .readFileSync(config.path.data, "utf-8")
   .split("\n")
-  .map(id => id.trim())
+  .map(id => normalizeMadridInput(id)?.canonicalId || id.trim())
   .filter(Boolean);
 
 // Deduplicate input IDs first
 const uniqueInputIDs = [...new Set(allIDs)];
 const duplicatesRemoved = allIDs.length - uniqueInputIDs.length;
+const forceRescrape = process.argv.includes("--force-rescrape");
+
+// Keep the normal daily-cache behaviour unless the caller explicitly asks to
+// refresh these IDs. Removing only the current input IDs preserves the rest of
+// today's processed set and lets the existing duplicate guard work normally.
+if (forceRescrape) {
+  uniqueInputIDs.forEach(id => scrapingState.alreadyScrapedIDs.delete(id));
+  originalConsole.log(`   Force rescrape: \x1b[33m${uniqueInputIDs.length}\x1b[0m input ID(s)`);
+}
 
 // Filter out already scraped IDs
 let IDs = uniqueInputIDs.filter(id => !scrapingState.alreadyScrapedIDs.has(id));
@@ -1033,6 +1050,10 @@ function getTypeById(id) {
 }
 
 function getUrlById(id) {
+  if (isMadridId(id)) {
+    const madrid = normalizeMadridInput(id);
+    return `https://www3.wipo.int/madrid/monitor/en/showData.jsp?ID=${madrid.romId}&DES=1`;
+  }
   const type = getTypeById(id);
   return config.BASE_URLS[type] + id.replace(/-/g, "");
 }
@@ -1375,6 +1396,18 @@ async function recurse_request(i, reattemptCount = 0) {
     }, config.timeout.REQUEST_TIMEOUT);
     
     try {
+      if (isMadridId(currentID)) {
+        const madridResult = await fetchMadridXml(currentID, {
+          headers: getRequestHeaders(),
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+        logJobDetails(i, madridResult.xmlResponse, IDs, startTime, reattemptCount);
+        scrapingState.resetReattemptCount(currentID);
+        extractDataThenContinue(i, madridResult.xml, madridResult);
+        return;
+      }
+
       // Fetch with abort signal and Node-safe browser-like headers
       const response = await fetch(url, getFetchOptions(controller.signal));
       
@@ -1532,7 +1565,7 @@ async function handleServerError(i, reattemptCount, currentID) {
 }
 
 // Enhanced data extraction with better error handling
-function extractDataThenContinue(i, text) {
+function extractDataThenContinue(i, text, sourceDetails = null) {
   const currentID = IDs[i].trim();
   
   try {
@@ -1543,7 +1576,39 @@ function extractDataThenContinue(i, text) {
       return;
     }
     
-    const outputData = extractFromHTML(text, currentID);
+    let madridParsed = null;
+    let outputData;
+    if (isMadridId(currentID)) {
+      ensureTrademarkOutputHeader();
+      madridParsed = parseMadridXml(text, normalizeMadridInput(currentID).madridNumber);
+
+      const xmlDir = path.join(baseOutputDir, "Madrid_XML");
+      fs.mkdirSync(xmlDir, { recursive: true });
+      const xmlPath = path.join(xmlDir, `ROM.${madridParsed.intRegNumber}.xml`);
+      const utf8Xml = String(text).replace(/encoding=["']ISO-8859-1["']/i, 'encoding="UTF-8"');
+      fs.writeFileSync(xmlPath, utf8Xml, "utf-8");
+      madridParsed.metadata.raw_xml_path = path.relative(__dirname, xmlPath);
+      madridParsed.metadata.record_url = sourceDetails?.pageUrl || getUrlById(currentID);
+      madridParsed.metadata.xml_url = sourceDetails?.xmlUrl || "";
+      madridParsed.metadata.image_url = sourceDetails?.imageUrl || "";
+      madridParsed.metadata.image_error = sourceDetails?.imageError || "";
+
+      if (sourceDetails?.imageBuffer?.length) {
+        const imageDir = path.join(baseOutputDir, "Madrid_Images");
+        fs.mkdirSync(imageDir, { recursive: true });
+        const extension = sourceDetails.imageFileExtension || "jpg";
+        const imagePath = path.join(imageDir, `${currentID}.${extension}`);
+        fs.writeFileSync(imagePath, sourceDetails.imageBuffer);
+        madridParsed.values[0] = imagePath;
+        madridParsed.metadata.local_image_path = imagePath;
+      } else {
+        madridParsed.metadata.local_image_path = "";
+      }
+
+      outputData = `${madridParsed.values.join("\t")}\n`;
+    } else {
+      outputData = extractFromHTML(text, currentID);
+    }
     const type = getTypeById(currentID);
     const formattedData = `${currentID}\t${outputData}`;
     
@@ -1564,9 +1629,10 @@ function extractDataThenContinue(i, text) {
     // Write structured JSON output for GUI/data post-processing.
     const structured = buildStructuredJsonRecord(type, currentID, outputData);
     if (structured) {
+      if (madridParsed) structured.madrid = madridParsed.metadata;
       jsonOutputStore[type].push(structured);
       jsonFlushCounters[type] += 1;
-      if (jsonFlushCounters[type] % 200 === 0) {
+      if (process.argv.includes("--live-json") || jsonFlushCounters[type] % 200 === 0) {
         flushJsonOutput(type);
       }
     }
@@ -1897,6 +1963,13 @@ function extractDesignData(doc) {
   return csvContent;
 }
 
+function ensureTrademarkOutputHeader() {
+  const outputPath = outputFiles["TRADEMARKS"];
+  if (fs.existsSync(outputPath) && fs.statSync(outputPath).size > 0) return;
+  const headerLine = ["ID", "Image", "Type", ...TYPE_FIELD_LABELS.TRADEMARKS, "Tiáº¿n trÃ¬nh"].join("\t") + "\n";
+  fs.appendFileSync(outputPath, headerLine);
+}
+
 function extractTrademarkData(doc) {
   const outputPath = outputFiles["TRADEMARKS"];
   let accordion1aData = Array.from(
@@ -2203,7 +2276,7 @@ async function postCheckAndRetry(maxRetries = 3) {
   const originalIDs = fs
     .readFileSync(config.path.data, "utf-8")
     .split("\n")
-    .map((s) => s.trim())
+    .map((s) => normalizeMadridInput(s)?.canonicalId || s.trim())
     .filter(Boolean)
     .filter(utils.isValidID); // Only include valid IDs
 
@@ -2361,7 +2434,7 @@ async function simpleRetryLoop() {
     const originalIDs = fs
       .readFileSync(config.path.data, "utf-8")
       .split("\n")
-      .map((s) => s.trim())
+      .map((s) => normalizeMadridInput(s)?.canonicalId || s.trim())
       .filter(Boolean)
       .filter(utils.isValidID);
 
@@ -2435,7 +2508,7 @@ async function simpleRetryLoop() {
   const finalOriginalIDs = fs
     .readFileSync(config.path.data, "utf-8")
     .split("\n")
-    .map((s) => s.trim())
+    .map((s) => normalizeMadridInput(s)?.canonicalId || s.trim())
     .filter(Boolean)
     .filter(utils.isValidID);
 

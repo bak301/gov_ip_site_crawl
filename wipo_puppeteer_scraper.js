@@ -2,11 +2,14 @@ const puppeteer = require('puppeteer');
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
+const { spawnSync } = require('child_process');
+const { WipoDatabase } = require('./wipo_database');
 
 class WipoTrademarkScraper {
     constructor() {
         this.browser = null;
         this.page = null;
+        this.browserExecutablePath = null;
         this.outputData = [];
         this.mode = null; // Will be set by user selection
         this.baseOutputDir = this.createOutputDirectory();
@@ -47,6 +50,16 @@ class WipoTrademarkScraper {
         
         this.outputFile = null; // Will be set after mode selection
         this.globalTrackingFile = path.join(__dirname, "WIPO_NextPage_Global_Tracking.txt");
+        this.databaseFile = path.join(__dirname, 'WIPO_Application_History.sqlite');
+        this.database = new WipoDatabase(this.databaseFile);
+        this.databaseStats = {
+            inserted: 0,
+            updated: 0,
+            unchanged: 0,
+            historical: 0,
+            changes: 0
+        };
+        this.completedSuccessfully = false;
     }
 
     createOutputDirectory() {
@@ -454,9 +467,37 @@ class WipoTrademarkScraper {
         }
     }
 
+    getBrowserExecutablePath() {
+        const candidates = [
+            process.env.WIPO_BROWSER_PATH,
+            process.env.PROGRAMFILES && path.join(process.env.PROGRAMFILES, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+            process.env['PROGRAMFILES(X86)'] && path.join(process.env['PROGRAMFILES(X86)'], 'Google', 'Chrome', 'Application', 'chrome.exe'),
+            process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+            process.env.PROGRAMFILES && path.join(process.env.PROGRAMFILES, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+            process.env['PROGRAMFILES(X86)'] && path.join(process.env['PROGRAMFILES(X86)'], 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+            process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Microsoft', 'Edge', 'Application', 'msedge.exe')
+        ].filter(Boolean);
+
+        // Prefer an installed browser. The Puppeteer cache can contain a partial
+        // Chrome download (for example chrome.exe without chrome.dll).
+        const installedBrowser = candidates.find(candidate => fs.existsSync(candidate));
+        if (installedBrowser) return installedBrowser;
+
+        const puppeteerBrowser = puppeteer.executablePath();
+        if (fs.existsSync(puppeteerBrowser)) return puppeteerBrowser;
+
+        throw new Error(
+            'No Chrome or Edge executable was found. Install Chrome, or set ' +
+            'WIPO_BROWSER_PATH to the full path of a working browser executable.'
+        );
+    }
+
     async init() {
         console.log('Initializing Puppeteer browser...');
+        this.browserExecutablePath = this.getBrowserExecutablePath();
+        console.log(`Using browser: ${this.browserExecutablePath}`);
         this.browser = await puppeteer.launch({
+            executablePath: this.browserExecutablePath,
             headless: false, // Start with GUI for manual setup
             defaultViewport: null,
             args: [
@@ -502,6 +543,7 @@ class WipoTrademarkScraper {
         
         // Launch new headless browser
         this.browser = await puppeteer.launch({
+            executablePath: this.browserExecutablePath || this.getBrowserExecutablePath(),
             headless: true, // Now in headless mode
             defaultViewport: null,
             args: [
@@ -767,11 +809,8 @@ class WipoTrademarkScraper {
                 return extractedData;
             }, this.mode, config.rowSelector);
             
-            // Add to total count for tracking
-            this.outputData = this.outputData.concat(extractedData);
-            
             // Simple colorized single-line log
-            console.log(`\x1b[36mPage ${currentPage}:\x1b[0m \x1b[32m${extractedData.length} records\x1b[0m | \x1b[33mTotal: ${this.outputData.length}\x1b[0m`);
+            console.log(`\x1b[36mPage ${currentPage}:\x1b[0m \x1b[32m${extractedData.length} records\x1b[0m`);
             
             return extractedData;
             
@@ -1210,7 +1249,25 @@ class WipoTrademarkScraper {
             fs.writeFileSync(this.outputFile, headers.join('\t') + '\n');
         }
         
-        // Append page data
+        // Merge this page into SQLite immediately. Each page is committed in one
+        // transaction. Only append the text export after the database commit succeeds.
+        const config = this.modeConfig[this.mode];
+        const databaseStats = this.database.mergeRecords(pageData, {
+            mode: this.mode,
+            source: `NextPage_${config.name}_Scraper`,
+            observedAt: new Date()
+        });
+        Object.keys(this.databaseStats).forEach(key => {
+            this.databaseStats[key] += databaseStats[key];
+        });
+        console.log(
+            `Database: ${databaseStats.inserted} new, ` +
+            `${databaseStats.updated} updated, ` +
+            `${databaseStats.unchanged} unchanged, ` +
+            `${databaseStats.changes} field changes`
+        );
+
+        // Append the compatibility text export after the durable database save.
         pageData.forEach(record => {
             fs.appendFileSync(this.outputFile, record.join('\t') + '\n');
         });
@@ -1344,6 +1401,11 @@ class WipoTrademarkScraper {
             await this.browser.close();
             console.log('Browser closed');
         }
+        if (this.database) {
+            this.database.close();
+            this.database = null;
+            console.log('Database closed');
+        }
     }
 
     async run() {
@@ -1365,6 +1427,7 @@ class WipoTrademarkScraper {
             
             // Final statistics
             this.printFinalSummary();
+            this.completedSuccessfully = true;
             
         } catch (error) {
             console.error('Error during scraping:', error);
@@ -1381,6 +1444,14 @@ class WipoTrademarkScraper {
         console.log(`📄 Output file: ${this.outputFile}`);
         console.log(`🕒 Completed at: ${new Date().toLocaleString()}`);
         
+        console.log(`Database file: ${this.databaseFile}`);
+        console.log(
+            `Database merge: ${this.databaseStats.inserted} new, ` +
+            `${this.databaseStats.updated} updated, ` +
+            `${this.databaseStats.unchanged} unchanged, ` +
+            `${this.databaseStats.changes} field changes`
+        );
+
         if (this.outputData.length > 0) {
             console.log(`\n📊 Sample of first few records:`);
             this.outputData.slice(0, 3).forEach((record, index) => {
@@ -1404,6 +1475,25 @@ async function main() {
     const scraper = new WipoTrademarkScraper();
     await scraper.run();
     console.log('Scraping completed!');
+    const publisher = process.env.TRADEMARK_API_PUBLISHER;
+    const targetRoot = process.env.TRADEMARK_API_DATA_ROOT;
+    if (publisher && targetRoot && scraper.completedSuccessfully) {
+        const wipoDatabase = process.env.TRADEMARK_WIPO_DATABASE || scraper.databaseFile;
+        console.log('\nPublishing the completed WIPO snapshot to the Trademark API...');
+        const publisherArgs = [publisher, '--target', targetRoot, '--wipo', wipoDatabase, '--wipo-only'];
+        if (process.env.TRADEMARK_API_URL) publisherArgs.push('--api-url', process.env.TRADEMARK_API_URL);
+        const result = spawnSync('python', publisherArgs, {
+            stdio: 'inherit',
+            windowsHide: false
+        });
+        if (result.error || result.status !== 0) {
+            console.error(`API publication failed: ${result.error?.message || `exit code ${result.status}`}`);
+        } else {
+            console.log('API WIPO snapshot published successfully.');
+        }
+    } else if (publisher && targetRoot) {
+        console.log('API publication skipped because the scraper did not complete successfully.');
+    }
 }
 
 // Handle graceful shutdown

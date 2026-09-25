@@ -257,3 +257,97 @@ input[type="text"] {
   font-family: Consolas, "Courier New", monospace;
   font-size: 12px;
 }
+
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 21, 25, 0.45);
+  z-index: 999;
+}
+
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: min(1120px, 92vw);
+  height: 100vh;
+  background: var(--paper);
+  border-left: 1px solid var(--line);
+  box-shadow: -8px 0 30px rgba(0, 0, 0, 0.25);
+  display: grid;
+  grid-template-rows: auto auto 1fr auto;
+  gap: 12px;
+  padding: 14px;
+  z-index: 1000;
+}
+
+.drawer.is-hidden,
+.drawer-backdrop.is-hidden {
+  display: none;
+}
+
+.drawer-header,
+.drawer-footer,
+.drawer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.drawer-section {
+  display: grid;
+  gap: 8px;
+}
+
+.drawer-help {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.drawer-row input[type="text"] {
+  flex: 1;
+}
+
+.drawer-table-wrap {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: auto;
+  max-height: 52vh;
+  background: #fff;
+}
+
+.drawer-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.drawer-table th,
+.drawer-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid #eadfce;
+  text-align: left;
+  vertical-align: top;
+}
+
+.drawer-table thead th {
+  position: sticky;
+  top: 0;
+  background: #f4ebde;
+  z-index: 1;
+}
+
+.drawer-table tr:hover td {
+  background: #fff9f1;
+}
+
+.drawer-table tr.is-row-disabled td {
+  color: #7b7b7b;
+  background: #f1f1f1;
+}
+
+.drawer-table tr.is-row-disabled:hover td {
+  background: #ececec;
+}

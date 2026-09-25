@@ -1,6 +1,8 @@
 const presetSelect = document.getElementById("presetSelect");
 const runButton = document.getElementById("runButton");
 const stopButton = document.getElementById("stopButton");
+const toggleDeleteModeButton = document.getElementById("toggleDeleteModeButton");
+const exportExcelButton = document.getElementById("exportExcelButton");
 const clearLogButton = document.getElementById("clearLogButton");
 const logOutput = document.getElementById("logOutput");
 const statusBadge = document.getElementById("statusBadge");
@@ -13,13 +15,17 @@ const outputFileSelect = document.getElementById("outputFileSelect");
 const refreshOutputButton = document.getElementById("refreshOutputButton");
 const copyAllOutputButton = document.getElementById("copyAllOutputButton");
 const outputViewport = document.getElementById("outputViewport");
+const outputTableEl = document.getElementById("outputTable");
 const outputTableBody = document.querySelector("#outputTable tbody");
+const imagePreviewPopup = document.getElementById("imagePreviewPopup");
+const imagePreviewImg = document.getElementById("imagePreviewImg");
 
 let running = false;
 let outputPollTimer = null;
 let lastOutputSignature = "";
 let currentOutputContent = "";
 let copyButtonResetTimer = null;
+let deleteModeActive = false;
 
 const ansiState = {
   color: null,
@@ -121,6 +127,13 @@ function setStatus(state, text) {
   statusBadge.textContent = text;
 }
 
+function setDeleteMode(active) {
+  deleteModeActive = active;
+  outputTableEl.classList.toggle("delete-mode-active", active);
+  toggleDeleteModeButton.textContent = active ? "Delete Mode: On" : "Delete Mode: Off";
+  toggleDeleteModeButton.classList.toggle("active", active);
+}
+
 function setRunningState(isRunning) {
   running = isRunning;
   runButton.disabled = isRunning;
@@ -129,6 +142,10 @@ function setRunningState(isRunning) {
   inputFileSelect.disabled = isRunning;
   loadInputButton.disabled = isRunning;
   saveInputButton.disabled = isRunning;
+  toggleDeleteModeButton.disabled = isRunning;
+  if (isRunning) {
+    setDeleteMode(false);
+  }
 }
 
 function parseIdsFromInputText(text) {
@@ -140,7 +157,74 @@ function parseIdsFromInputText(text) {
   return Array.from(new Set(ids));
 }
 
+function buildTrademarkThumbnailUrl(applicationNo, savedImagePath = "") {
+  if (/^5-/.test(String(applicationNo || "").trim())) {
+    const localPath = String(savedImagePath || "").trim();
+    if (!localPath || localPath.toLowerCase() === "no image") return null;
+    return encodeURI(`file:///${localPath.replace(/\\/g, "/")}`);
+  }
+  const digits = String(applicationNo || "").trim().replace(/-/g, "");
+  if (!digits) {
+    return null;
+  }
+  return `https://wipopublish.ipvietnam.gov.vn/wopublish-search/service/trademarks/application/VN${digits}/thumbnail?noLogo=true`;
+}
+
+function isCurrentOutputTrademarkFile() {
+  return /^nh_wipo_/i.test(String(outputFileSelect.value || ""));
+}
+
+function showImagePreview(thumbnailImg) {
+  imagePreviewImg.src = thumbnailImg.src;
+  const rect = thumbnailImg.getBoundingClientRect();
+  const popupMaxSize = 336;
+
+  let left = rect.right + 12;
+  if (left + popupMaxSize > window.innerWidth) {
+    left = rect.left - popupMaxSize - 12;
+  }
+  left = Math.max(8, left);
+
+  let top = rect.top;
+  if (top + popupMaxSize > window.innerHeight) {
+    top = Math.max(8, window.innerHeight - popupMaxSize - 8);
+  }
+
+  imagePreviewPopup.style.left = `${left}px`;
+  imagePreviewPopup.style.top = `${top}px`;
+  imagePreviewPopup.style.display = "block";
+}
+
+function hideImagePreview() {
+  imagePreviewPopup.style.display = "none";
+}
+
+function normalizeDotDatesForDisplay(value) {
+  return String(value || "").replace(/\b(\d{2})\.(\d{2})\.(\d{4})\b/g, "$1/$2/$3");
+}
+
+function extractRegNoForDisplay(rawRegNo) {
+  // Raw format is Type-RegNo-Suffix, e.g. "4-0212225-000" where the leading
+  // digit is the document type (1/2 patent, 3 design, 4 trademark) and the
+  // trailing segment is a suffix/check code. Only the middle segment is the
+  // actual registration number.
+  const text = String(rawRegNo || "").trim();
+  const parts = text.split("-");
+  const regNo = parts.length === 3 ? parts[1] : text;
+  return regNo.replace(/^0+(?=\d)/, "");
+}
+
+function splitRegNoAndDateForDisplay(rawValue) {
+  const text = normalizeDotDatesForDisplay(rawValue).trim();
+  const match = text.match(/^(\S+)\s+(\d{2}\/\d{2}\/\d{4})$/);
+  if (match) {
+    return { regNo: extractRegNoForDisplay(match[1]), regDate: match[2] };
+  }
+  return { regNo: text, regDate: "" };
+}
+
 function renderOutputTable(content) {
+  hideImagePreview();
   const previousLeft = outputViewport.scrollLeft;
   const previousTop = outputViewport.scrollTop;
 
@@ -148,6 +232,13 @@ function renderOutputTable(content) {
     .split(/\r?\n/)
     .filter((line) => line.trim().length > 0);
 
+  const headerLine = lines.find((line) => line.startsWith("ID\t"));
+  const headerColumnsRaw = headerLine ? headerLine.split("\t") : [];
+  const primaryMarkNameColIndex = headerColumnsRaw.findIndex((h) => /^\(541\)/.test(String(h || "").trim()));
+  const fallbackMarkNameColIndex = headerColumnsRaw.findIndex((h) => /^\(571\)/.test(String(h || "").trim()));
+  const regNoDateColIndex = headerColumnsRaw.findIndex((h) => /Số bằng và ngày cấp/.test(String(h || "")));
+
+  const showThumbnails = isCurrentOutputTrademarkFile();
   const fragment = document.createDocumentFragment();
 
   if (lines.length === 0) {
@@ -159,8 +250,106 @@ function renderOutputTable(content) {
   } else {
     for (const line of lines) {
       const tr = document.createElement("tr");
+      const isHeaderRow = line.startsWith("ID\t");
       const columns = line.split("\t");
-      for (const col of columns) {
+
+      const deleteTd = document.createElement("td");
+      deleteTd.className = "delete-cell";
+      if (isHeaderRow) {
+        deleteTd.textContent = "";
+      } else {
+        const applicationNo = (columns[0] || "").trim();
+        tr.dataset.id = applicationNo;
+        const deleteBtn = document.createElement("button");
+        deleteBtn.className = "row-delete-btn";
+        deleteBtn.type = "button";
+        deleteBtn.title = "Delete this entry so the next run re-scrapes it";
+        deleteBtn.textContent = "\u{1F5D1}️";
+        deleteTd.appendChild(deleteBtn);
+      }
+      tr.appendChild(deleteTd);
+
+      if (showThumbnails) {
+        const thumbTd = document.createElement("td");
+        thumbTd.className = "thumbnail-cell";
+
+        if (isHeaderRow) {
+          thumbTd.textContent = "Thumbnail";
+        } else {
+          const applicationNo = columns[0] || "";
+          const savedImagePath = columns[1] || "";
+          const markName = [primaryMarkNameColIndex, fallbackMarkNameColIndex]
+            .filter((index) => index >= 0)
+            .map((index) => String(columns[index] || "").replace(/^\(\s*VI\s*\)\s*/i, "").trim())
+            .find(Boolean) || "";
+          const emptyImageText = markName || "No image";
+          const isMadridImage = /^5-/.test(String(applicationNo).trim()) && savedImagePath.trim() && savedImagePath.trim().toLowerCase() !== "no image";
+          const thumbnailUrl = buildTrademarkThumbnailUrl(applicationNo, savedImagePath);
+
+          if (isMadridImage) {
+            const img = document.createElement("img");
+            img.className = "thumbnail-img";
+            img.loading = "lazy";
+            img.alt = applicationNo;
+            img.addEventListener("error", () => {
+              img.replaceWith(
+                Object.assign(document.createElement("span"), {
+                  className: "thumbnail-placeholder",
+                  textContent: emptyImageText,
+                })
+              );
+            });
+            thumbTd.appendChild(img);
+            window.wipoGui.readLocalImage({ path: savedImagePath }).then((result) => {
+              if (result && result.ok && result.dataUrl) {
+                img.src = result.dataUrl;
+              } else if (img.isConnected) {
+                img.dispatchEvent(new Event("error"));
+              }
+            }).catch(() => {
+              if (img.isConnected) img.dispatchEvent(new Event("error"));
+            });
+          } else if (thumbnailUrl) {
+            const img = document.createElement("img");
+            img.className = "thumbnail-img";
+            img.loading = "lazy";
+            img.src = thumbnailUrl;
+            img.alt = applicationNo;
+            img.addEventListener("error", () => {
+              img.replaceWith(
+                Object.assign(document.createElement("span"), {
+                  className: "thumbnail-placeholder",
+                  textContent: emptyImageText,
+                })
+              );
+            });
+            thumbTd.appendChild(img);
+          } else {
+            const placeholder = document.createElement("span");
+            placeholder.className = "thumbnail-placeholder";
+            placeholder.textContent = emptyImageText;
+            thumbTd.appendChild(placeholder);
+          }
+        }
+
+        tr.appendChild(thumbTd);
+      }
+
+      let displayColumns;
+      if (isHeaderRow) {
+        displayColumns = columns.slice();
+        if (regNoDateColIndex >= 0) {
+          displayColumns.splice(regNoDateColIndex, 1, "Reg. No.", "Reg. Date (dd/mm/yyyy)");
+        }
+      } else {
+        displayColumns = columns.map((value) => normalizeDotDatesForDisplay(value));
+        if (regNoDateColIndex >= 0) {
+          const { regNo, regDate } = splitRegNoAndDateForDisplay(columns[regNoDateColIndex]);
+          displayColumns.splice(regNoDateColIndex, 1, regNo, regDate);
+        }
+      }
+
+      for (const col of displayColumns) {
         const td = document.createElement("td");
         td.textContent = col;
         tr.appendChild(td);
@@ -518,6 +707,77 @@ stopButton.addEventListener("click", async () => {
   }
 });
 
+toggleDeleteModeButton.addEventListener("click", () => {
+  setDeleteMode(!deleteModeActive);
+});
+
+async function deleteOutputRow(applicationNo, trElement) {
+  const dateFolder = outputDateSelect.value;
+  const fileName = outputFileSelect.value;
+
+  if (!dateFolder || !fileName || !applicationNo) {
+    return;
+  }
+
+  trElement.classList.add("row-deleting");
+
+  try {
+    const result = await window.wipoGui.deleteEntries({
+      dateFolder,
+      fileName,
+      ids: [applicationNo],
+    });
+
+    if (!result.ok) {
+      appendLog(`\n[GUI] Failed to delete ${applicationNo}: ${result.error}\n`);
+      trElement.classList.remove("row-deleting");
+      return;
+    }
+
+    appendLog(
+      `\n[GUI] Deleted ${applicationNo} from ${dateFolder}/${fileName} ` +
+        `(${result.removedRows} row, ${result.removedJsonEntries} JSON record).\n`
+    );
+    trElement.remove();
+  } catch (error) {
+    appendLog(`\n[GUI] Failed to delete ${applicationNo}: ${error.message}\n`);
+    trElement.classList.remove("row-deleting");
+  }
+}
+
+outputTableBody.addEventListener("click", (event) => {
+  if (!deleteModeActive) {
+    return;
+  }
+
+  const deleteBtn = event.target.closest(".row-delete-btn");
+  if (!deleteBtn) {
+    return;
+  }
+
+  const tr = deleteBtn.closest("tr");
+  const applicationNo = tr ? tr.dataset.id : "";
+  if (!applicationNo) {
+    return;
+  }
+
+  deleteOutputRow(applicationNo, tr);
+});
+
+outputTableBody.addEventListener("mouseover", (event) => {
+  const thumbnailImg = event.target.closest(".thumbnail-img");
+  if (thumbnailImg) {
+    showImagePreview(thumbnailImg);
+  }
+});
+
+outputTableBody.addEventListener("mouseout", (event) => {
+  const thumbnailImg = event.target.closest(".thumbnail-img");
+  if (thumbnailImg) {
+    hideImagePreview();
+  }
+});
+
 loadInputButton.addEventListener("click", async () => {
   await loadSelectedInputFile();
 });
@@ -563,6 +823,84 @@ copyAllOutputButton.addEventListener("click", async () => {
   }
 });
 
+async function fetchTrademarkImageBytes(applicationNo) {
+  const url = buildTrademarkThumbnailUrl(applicationNo);
+  if (!url) {
+    return null;
+  }
+
+  try {
+    // Uses the renderer's own (Chromium) network stack, the same path the
+    // live thumbnail <img> previews already use successfully -- unlike the
+    // main process's Node/undici fetch, which fails against this host.
+    const response = await fetch(url, { headers: { Accept: "image/*" } });
+    if (!response.ok) {
+      return null;
+    }
+    const arrayBuffer = await response.arrayBuffer();
+    return { applicationNo, bytes: new Uint8Array(arrayBuffer) };
+  } catch (error) {
+    return null;
+  }
+}
+
+function collectApplicationNosFromOutput(content) {
+  return String(content || "")
+    .split(/\r?\n/)
+    .filter((line) => line.trim() && !line.startsWith("ID\t"))
+    .map((line) => (line.split("\t")[0] || "").trim())
+    .filter(Boolean);
+}
+
+exportExcelButton.addEventListener("click", async () => {
+  const dateFolder = outputDateSelect.value;
+  const fileName = outputFileSelect.value;
+
+  if (!dateFolder || !fileName) {
+    appendLog("\n[GUI] No output file selected to export.\n");
+    return;
+  }
+
+  exportExcelButton.disabled = true;
+  const originalLabel = exportExcelButton.textContent;
+
+  try {
+    const images = [];
+
+    if (/^nh_wipo_/i.test(fileName)) {
+      const applicationNos = collectApplicationNosFromOutput(currentOutputContent);
+      let fetched = 0;
+
+      for (const applicationNo of applicationNos) {
+        exportExcelButton.textContent = `Fetching images ${fetched + 1}/${applicationNos.length}...`;
+        const image = await fetchTrademarkImageBytes(applicationNo);
+        if (image) {
+          images.push(image);
+        }
+        fetched += 1;
+      }
+
+      appendLog(`\n[GUI] Fetched ${images.length}/${applicationNos.length} trademark images for export.\n`);
+    }
+
+    exportExcelButton.textContent = "Exporting...";
+
+    const result = await window.wipoGui.exportExcel({ dateFolder, fileName, images });
+    if (result.canceled) {
+      appendLog("\n[GUI] Excel export canceled.\n");
+    } else if (!result.ok) {
+      appendLog(`\n[GUI] Excel export failed: ${result.error}\n`);
+    } else {
+      appendLog(`\n[GUI] Exported ${dateFolder}/${fileName} to ${result.path}\n`);
+    }
+  } catch (error) {
+    appendLog(`\n[GUI] Excel export failed: ${error.message}\n`);
+  } finally {
+    exportExcelButton.disabled = false;
+    exportExcelButton.textContent = originalLabel;
+  }
+});
+
 clearLogButton.addEventListener("click", () => {
   logOutput.innerHTML = "";
   ansiState.color = null;
@@ -580,6 +918,7 @@ window.wipoGui.onRunLog((payload) => {
 
 renderOutputTable("");
 setRunningState(false);
+setDeleteMode(false);
 setStatus("idle", "Idle");
 
 Promise.all([

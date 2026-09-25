@@ -24,6 +24,16 @@ const toggleAutoScrollButton = document.getElementById("toggleAutoScrollButton")
 const togglePreviewButton = document.getElementById("togglePreviewButton");
 const log = document.getElementById("log");
 const clearLogButton = document.getElementById("clearLogButton");
+const downloadDrawer = document.getElementById("downloadDrawer");
+const downloadDrawerBackdrop = document.getElementById("downloadDrawerBackdrop");
+const closeDownloadDrawerButton = document.getElementById("closeDownloadDrawerButton");
+const drawerDownloadDirInput = document.getElementById("drawerDownloadDirInput");
+const drawerBrowseDownloadDirButton = document.getElementById("drawerBrowseDownloadDirButton");
+const drawerSelectAllButton = document.getElementById("drawerSelectAllButton");
+const drawerClearSelectionButton = document.getElementById("drawerClearSelectionButton");
+const drawerStats = document.getElementById("drawerStats");
+const drawerTableBody = document.getElementById("drawerTableBody");
+const drawerRunDownloadButton = document.getElementById("drawerRunDownloadButton");
 
 let currentTitleCounts = [];
 let previewAutoScroll = true;
@@ -34,6 +44,10 @@ let lastOutputDir = "";
 let currentSourceDir = "";
 let currentDownloadDir = "";
 const APP_NO_PATTERN = /^[12]-\d{4}-\d{5,}$/;
+const LOOKUP_GUI_STATE_KEY = "lookupGuiStateV1";
+
+let drawerMatches = [];
+let lastDrawerStats = {};
 
 function appendLog(text) {
   log.textContent += `${text}\n`;
@@ -49,6 +63,155 @@ function appendPreviewLine(text) {
   if (previewAutoScroll) {
     preview.scrollTop = preview.scrollHeight;
   }
+}
+
+function saveGuiState() {
+  const payload = {
+    appNoInput: String(appNoInput && appNoInput.value ? appNoInput.value : ""),
+    sourceDir: String(sourceDirInput && sourceDirInput.value ? sourceDirInput.value : ""),
+    downloadDir: String(downloadDirInput && downloadDirInput.value ? downloadDirInput.value : ""),
+    drawerDownloadDir: String(drawerDownloadDirInput && drawerDownloadDirInput.value ? drawerDownloadDirInput.value : ""),
+    sourceFile: String(sourceFileSelect && sourceFileSelect.value ? sourceFileSelect.value : ""),
+  };
+  try {
+    localStorage.setItem(LOOKUP_GUI_STATE_KEY, JSON.stringify(payload));
+  } catch (_error) {
+    // Ignore state write failures.
+  }
+}
+
+function loadGuiState() {
+  try {
+    const raw = localStorage.getItem(LOOKUP_GUI_STATE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function openDownloadDrawer() {
+  if (!downloadDrawer || !downloadDrawerBackdrop) {
+    throw new Error("Download drawer elements are missing from renderer HTML.");
+  }
+  downloadDrawer.classList.remove("is-hidden");
+  downloadDrawerBackdrop.classList.remove("is-hidden");
+  downloadDrawer.setAttribute("aria-hidden", "false");
+}
+
+function closeDownloadDrawer() {
+  if (!downloadDrawer || !downloadDrawerBackdrop) {
+    return;
+  }
+  downloadDrawer.classList.add("is-hidden");
+  downloadDrawerBackdrop.classList.add("is-hidden");
+  downloadDrawer.setAttribute("aria-hidden", "true");
+}
+
+function getSelectedDrawerMatchKeys() {
+  const checks = drawerTableBody.querySelectorAll('input[type="checkbox"][data-match-key]');
+  return Array.from(checks)
+    .filter((x) => x.checked && !x.disabled)
+    .map((x) => String(x.dataset.matchKey || ""))
+    .filter(Boolean);
+}
+
+function updateDrawerStats(stats = null) {
+  if (stats && typeof stats === "object") {
+    lastDrawerStats = { ...stats };
+  }
+  const viewStats = (lastDrawerStats && typeof lastDrawerStats === "object") ? lastDrawerStats : {};
+
+  const checkedCount = getSelectedDrawerMatchKeys().length;
+  const selectableCount = drawerMatches.filter((match) => {
+    const isMissingInSource = Boolean(match && match.missingInSource);
+    const hasKey = String(match && match.matchKey ? match.matchKey : "").length > 0;
+    return !isMissingInSource && hasKey;
+  }).length;
+
+  const lines = [
+    `Rows in table: ${drawerMatches.length}`,
+    `Selected rows: ${checkedCount}`,
+    `Selectable rows: ${selectableCount}`,
+    `Found in source file: ${viewStats.manualFoundInSourceCount || 0}`,
+    `Matched in Lookup.tsv: ${viewStats.manualMatchedCount || 0}`,
+    `Missing from source file: ${viewStats.manualMissingInSourceCount || 0}`,
+    `Missing from Lookup.tsv: ${viewStats.manualMissingInLookupCount || 0}`,
+  ];
+
+  if (selectableCount === 0) {
+    lines.push("No selectable rows. Rows marked Missing from source are read-only.");
+  }
+
+  drawerStats.textContent = lines.join("\n");
+
+  if (drawerRunDownloadButton) {
+    drawerRunDownloadButton.disabled = checkedCount === 0;
+  }
+}
+
+function renderDrawerRows(matches, stats = {}) {
+  lastDrawerStats = (stats && typeof stats === "object") ? { ...stats } : {};
+  const sourceMatches = Array.isArray(matches) ? matches : [];
+  const missingInSource = Array.isArray(stats.manualMissingInSource) ? stats.manualMissingInSource : [];
+
+  drawerMatches = [
+    ...sourceMatches,
+    ...missingInSource.map((appNo) => ({
+      so_don: appNo,
+      so_bang: "",
+      caseRef: "",
+      attorney: "",
+      status: "",
+      source_entry_title: "Not found in source file",
+      lookupMatched: false,
+      missingInSource: true,
+      matchKey: "",
+    })),
+  ];
+
+  drawerTableBody.innerHTML = "";
+
+  drawerMatches.forEach((match) => {
+    const isMissingInSource = Boolean(match.missingInSource);
+    const isLookupUnmatched = !isMissingInSource && !Boolean(match.lookupMatched);
+    const selectable = !isMissingInSource && String(match.matchKey || "").length > 0;
+
+    const tr = document.createElement("tr");
+    if (!selectable) {
+      tr.classList.add("is-row-disabled");
+    }
+
+    const tdCheck = document.createElement("td");
+    const check = document.createElement("input");
+    check.type = "checkbox";
+    check.checked = selectable;
+    check.disabled = !selectable;
+    check.dataset.matchKey = String(match.matchKey || "");
+    check.addEventListener("change", () => updateDrawerStats(stats));
+    tdCheck.appendChild(check);
+
+    const fields = [
+      String(match.so_don || ""),
+      String(match.so_bang || ""),
+      String(match.caseRef || ""),
+      String(match.attorney || ""),
+      isMissingInSource ? "Missing from source" : (isLookupUnmatched ? "Missing in Lookup.tsv" : String(match.status || "")),
+      String(match.source_entry_title || ""),
+    ];
+
+    tr.appendChild(tdCheck);
+    fields.forEach((value) => {
+      const td = document.createElement("td");
+      td.textContent = value;
+      tr.appendChild(td);
+    });
+
+    drawerTableBody.appendChild(tr);
+  });
+
+  updateDrawerStats(lastDrawerStats);
 }
 
 function clearPreview() {
@@ -204,6 +367,9 @@ async function loadPathSettings() {
   currentDownloadDir = String(result.downloadDir || "");
   sourceDirInput.value = currentSourceDir;
   downloadDirInput.value = currentDownloadDir;
+  if (!drawerDownloadDirInput.value) {
+    drawerDownloadDirInput.value = currentDownloadDir;
+  }
   appendLog(`[INFO] Source directory: ${currentSourceDir}`);
   appendLog(`[INFO] Download directory: ${currentDownloadDir}`);
 }
@@ -222,6 +388,10 @@ async function applyPathSettings() {
   currentDownloadDir = String(result.downloadDir || "");
   sourceDirInput.value = currentSourceDir;
   downloadDirInput.value = currentDownloadDir;
+  if (!String(drawerDownloadDirInput.value || "").trim()) {
+    drawerDownloadDirInput.value = currentDownloadDir;
+  }
+  saveGuiState();
 
   appendLog(`[INFO] Paths applied.`);
   appendLog(`[INFO] Source directory: ${currentSourceDir}`);
@@ -343,11 +513,55 @@ async function runLookup() {
   appendLog(`[LOOKUP] Done. matches=${result.matchCount}, sourceFound=${stats.manualFoundInSourceCount || 0}, lookupFound=${stats.manualMatchedCount || 0}, missSource=${stats.manualMissingInSourceCount || 0}, missLookup=${stats.manualMissingInLookupCount || 0}`);
 }
 
+async function prepareDownloadDrawer() {
+  try {
+    const fileName = sourceFileSelect.value;
+    const analyzed = analyzeManualAppNos();
+    const manualAppNos = analyzed.validUnique;
+
+    if (!fileName) {
+      appendLog("[WARN] Select a source file first.");
+      return;
+    }
+    if (manualAppNos.length === 0) {
+      appendLog("[WARN] Paste valid Application No. values before download. Required format: 1-yyyy-00000");
+      return;
+    }
+
+    if (analyzed.invalidUnique.length > 0) {
+      appendLog(`[WARN] Ignoring ${analyzed.invalidUnique.length} invalid IDs (expected format: 1-yyyy-00000).`);
+    }
+
+    appendLog(`[DOWNLOAD] Preparing drawer for ${manualAppNos.length} valid App Nos...`);
+    const result = await window.lookupGui.lookupMatches({ fileName, selectedTitles: [], manualAppNos });
+    if (!result.ok) {
+      appendLog(`[ERR] ${result.error}`);
+      return;
+    }
+
+    const allMatches = Array.isArray(result.matches) ? result.matches : (result.preview || []);
+    renderDrawerRows(allMatches, result.stats || {});
+
+    if (!drawerDownloadDirInput) {
+      throw new Error("Drawer download directory input is missing from renderer HTML.");
+    }
+
+    if (!String(drawerDownloadDirInput.value || "").trim()) {
+      drawerDownloadDirInput.value = String(downloadDirInput.value || currentDownloadDir || "");
+    }
+    saveGuiState();
+    openDownloadDrawer();
+  } catch (error) {
+    appendLog(`[ERR] Download drawer open failed: ${error.message || String(error)}`);
+  }
+}
+
 async function downloadSelected() {
   const fileName = sourceFileSelect.value;
   const analyzed = analyzeManualAppNos();
   const manualAppNos = analyzed.validUnique;
-  const downloadDir = String(downloadDirInput.value || "").trim();
+  const selectedMatchKeys = getSelectedDrawerMatchKeys();
+  const downloadDir = String(drawerDownloadDirInput.value || downloadDirInput.value || "").trim();
 
   if (!fileName) {
     appendLog("[WARN] Select a source file first.");
@@ -362,12 +576,18 @@ async function downloadSelected() {
     appendLog(`[WARN] Ignoring ${analyzed.invalidUnique.length} invalid IDs (expected format: 1-yyyy-00000).`);
   }
 
-  appendLog(`[DOWNLOAD] Starting download for ${manualAppNos.length} valid App Nos...`);
+  if (selectedMatchKeys.length === 0) {
+    appendLog("[WARN] Select at least one row in the download drawer.");
+    return;
+  }
+
+  appendLog(`[DOWNLOAD] Starting download for ${selectedMatchKeys.length} selected rows (from ${manualAppNos.length} App Nos)...`);
   clearPreview();
-  appendPreviewLine(`[DOWNLOAD] Started (appNos=${manualAppNos.length})...`);
+  appendPreviewLine(`[DOWNLOAD] Started (selectedRows=${selectedMatchKeys.length}, appNos=${manualAppNos.length})...`);
   downloadInProgress = true;
   abortDownloadButton.disabled = false;
   downloadButton.disabled = true;
+  drawerRunDownloadButton.disabled = true;
 
   let result;
   try {
@@ -375,6 +595,7 @@ async function downloadSelected() {
       fileName,
       selectedTitles: [],
       manualAppNos,
+      selectedMatchKeys,
       downloadDir,
       headlessBrowser: !!headlessCheckbox.checked,
     });
@@ -386,6 +607,7 @@ async function downloadSelected() {
     downloadInProgress = false;
     abortDownloadButton.disabled = true;
     downloadButton.disabled = false;
+    drawerRunDownloadButton.disabled = false;
   }
 
   if (!result.ok) {
@@ -396,6 +618,7 @@ async function downloadSelected() {
 
   setSummary([
     `Total matches: ${result.totalMatches}`,
+    `Requested matches before selection: ${result.requestedMatches || 0}`,
     result.stats ? `Manual App No. count: ${result.stats.manualAppNoCount || 0}` : "",
     result.stats ? `Found in source file: ${result.stats.manualFoundInSourceCount || 0}` : "",
     result.stats ? `Matched in Lookup.tsv: ${result.stats.manualMatchedCount || 0}` : "",
@@ -409,11 +632,20 @@ async function downloadSelected() {
     `Failed: ${result.failed}`,
     `Cancelled: ${result.cancelled || 0}`,
     `Output folder: ${result.outputDir}`,
+    `Aggregate copy folder: ${result.aggregateDir || ""}`,
+    `Aggregate copies written: ${result.aggregateCopied || 0}`,
   ].filter(Boolean));
 
   appendPreviewLine(`[DOWNLOAD] Done. Downloaded=${result.downloaded}, New=${result.downloadedNew || 0}, Skipped=${result.skippedExisting || 0}, Failed=${result.failed}, Cancelled=${result.cancelled || 0}`);
   appendPreviewLine(`[OUTPUT] ${result.outputDir}`);
+  appendPreviewLine(`[AGGREGATE] ${result.aggregateDir || ""}`);
   lastOutputDir = String(result.outputDir || "");
+  closeDownloadDrawer();
+
+  if (Array.isArray(result.aggregateCopyErrors) && result.aggregateCopyErrors.length > 0) {
+    appendLog(`[WARN] Aggregate copy errors: ${result.aggregateCopyErrors.length} (showing up to 50)`);
+    result.aggregateCopyErrors.forEach((line) => appendLog(`  - ${line}`));
+  }
 
   if (result.failures && result.failures.length > 0) {
     appendLog(`[WARN] Download failures: ${result.failures.length} (showing up to 50)`);
@@ -459,9 +691,50 @@ browseDownloadDirButton.addEventListener("click", () => browseDirectoryForInput(
 savePathSettingsButton.addEventListener("click", applyPathSettings);
 startScrapeButton.addEventListener("click", startMonthlyScrape);
 lookupButton.addEventListener("click", runLookup);
-downloadButton.addEventListener("click", downloadSelected);
+downloadButton.addEventListener("click", prepareDownloadDrawer);
 openOutputFolderButton.addEventListener("click", openOutputFolder);
 abortDownloadButton.addEventListener("click", abortDownload);
+if (closeDownloadDrawerButton) {
+  closeDownloadDrawerButton.addEventListener("click", closeDownloadDrawer);
+}
+
+if (downloadDrawerBackdrop) {
+  downloadDrawerBackdrop.addEventListener("click", closeDownloadDrawer);
+}
+
+if (drawerBrowseDownloadDirButton && drawerDownloadDirInput) {
+  drawerBrowseDownloadDirButton.addEventListener("click", async () => {
+    await browseDirectoryForInput(drawerDownloadDirInput);
+    saveGuiState();
+  });
+}
+if (drawerSelectAllButton) {
+  drawerSelectAllButton.addEventListener("click", () => {
+    const checks = drawerTableBody.querySelectorAll('input[type="checkbox"][data-match-key]');
+    checks.forEach((x) => {
+      if (x.disabled) {
+        x.checked = false;
+        return;
+      }
+      x.checked = true;
+    });
+    updateDrawerStats();
+  });
+}
+
+if (drawerClearSelectionButton) {
+  drawerClearSelectionButton.addEventListener("click", () => {
+    const checks = drawerTableBody.querySelectorAll('input[type="checkbox"][data-match-key]');
+    checks.forEach((x) => {
+      x.checked = false;
+    });
+    updateDrawerStats();
+  });
+}
+
+if (drawerRunDownloadButton) {
+  drawerRunDownloadButton.addEventListener("click", downloadSelected);
+}
 
 selectAllButton.addEventListener("click", () => {
   const checks = titleList.querySelectorAll("input[type=checkbox][data-title]");
@@ -483,7 +756,13 @@ clearLogButton.addEventListener("click", () => {
 
 appNoInput.addEventListener("input", () => {
   updateAppNoInputStatus();
+  saveGuiState();
 });
+
+sourceFileSelect.addEventListener("change", saveGuiState);
+sourceDirInput.addEventListener("change", saveGuiState);
+downloadDirInput.addEventListener("change", saveGuiState);
+drawerDownloadDirInput.addEventListener("change", saveGuiState);
 
 toggleAutoScrollButton.addEventListener("click", () => {
   previewAutoScroll = !previewAutoScroll;
@@ -604,10 +883,36 @@ window.lookupGui.onDownloadLog((payload) => {
 });
 
 Promise.resolve()
+  .then(() => {
+    const saved = loadGuiState();
+    if (saved) {
+      if (typeof saved.appNoInput === "string") {
+        appNoInput.value = saved.appNoInput;
+      }
+      if (typeof saved.drawerDownloadDir === "string" && saved.drawerDownloadDir.trim()) {
+        drawerDownloadDirInput.value = saved.drawerDownloadDir.trim();
+      }
+    }
+  })
   .then(loadPathSettings)
   .then(refreshSourceFiles)
+  .then(() => {
+    const saved = loadGuiState();
+    if (saved && typeof saved.sourceFile === "string" && saved.sourceFile.trim()) {
+      const found = Array.from(sourceFileSelect.options).some((opt) => opt.value === saved.sourceFile);
+      if (found) {
+        sourceFileSelect.value = saved.sourceFile;
+      }
+    }
+  })
   .then(loadSelectedSource)
-  .then(() => updateAppNoInputStatus())
+  .then(() => {
+    if (!String(drawerDownloadDirInput.value || "").trim()) {
+      drawerDownloadDirInput.value = String(downloadDirInput.value || "");
+    }
+    updateAppNoInputStatus();
+    saveGuiState();
+  })
   .catch((error) => {
     appendLog(`[ERR] Initialization failed: ${error.message}`);
   });

@@ -135,3 +135,10 @@ dist
 package-lock.json
 *.txt
 Output/
+
+# Generated WIPO database and SQLite sidecar files
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.bak
+__pycache__/
