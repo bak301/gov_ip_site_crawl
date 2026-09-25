@@ -132,6 +132,13 @@ dist
 # data file
 *.csv
 *.html
+!electron/renderer/index.html
 package-lock.json
+!package-lock.json
 *.txt
+!README.md
 Output/
+data/
+exports/
+__pycache__/
+temp/

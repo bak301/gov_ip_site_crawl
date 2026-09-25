@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WipoPublish Vietnam Search</title>
+  <link rel="icon" type="image/x-icon" href="favicon.ico?v=2">
+  <link rel="shortcut icon" href="favicon.ico?v=2">
+  <link rel="icon" type="image/png" sizes="512x512" href="data-searching.png?v=2">
+  <link rel="apple-touch-icon" href="data-searching.png?v=2">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <img class="brand-mark" src="data-searching.png" alt="">
+    <div class="brand-copy">
+      <h1>WipoPublish Vietnam Search</h1>
+      <p>Vietnam patent records · snapshot history</p>
+    </div>
+    <div class="topbar-actions">
+      <span id="databaseStatus" class="db-pill"><span class="status-dot"></span> Connecting…</span>
+      <button id="typographySettingsButton" class="button ghost typography-button" type="button" title="Customize interface, heading, and content fonts">Typography</button>
+      <select id="presetSelect" aria-label="Scrape preset"></select>
+      <label class="retry-setting" for="retryCountInput" title="Number of retry attempts for each application">
+        <span>Retries</span>
+        <input id="retryCountInput" type="number" min="0" max="50" step="1" value="10" inputmode="numeric" aria-label="Retry count">
+      </label>
+      <button id="stopButton" class="button ghost danger" disabled>Stop</button>
+      <label class="rescrape-toggle" title="Include applications that already have a stored snapshot">
+        <input id="rescrapeCheckbox" type="checkbox">
+        <span>Re-scrape</span>
+      </label>
+      <button id="scrapeAllButton" class="button scrape-primary action-button"><span class="action-icon icon-refresh" aria-hidden="true"></span><span>Scrape All</span></button>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <aside class="case-panel">
+      <div class="panel-header">
+        <div class="named-list-controls">
+          <select id="namedListSelect" aria-label="Saved case list"></select>
+          <input id="namedListName" class="hidden" type="text" maxlength="60" aria-label="Rename case list">
+          <button id="addNamedListButton" class="button outline compact named-list-icon-button" type="button" title="Create a new case list" aria-label="Create a new case list"><span class="named-list-icon icon-plus" aria-hidden="true"></span></button>
+          <button id="renameNamedListButton" class="button outline compact named-list-icon-button" type="button" title="Rename selected case list" aria-label="Rename selected case list"><span class="named-list-icon icon-pencil" aria-hidden="true"></span></button>
+          <button id="removeNamedListButton" class="button outline compact named-list-icon-button remove-list-button" type="button" title="Remove selected case list" aria-label="Remove selected case list"><span class="named-list-icon icon-delete" aria-hidden="true"></span></button>
+        </div>
+        <div class="case-actions">
+          <button id="compactListButton" class="button outline compact list-density-button" type="button" aria-pressed="false" title="Switch to compact rows" aria-label="Switch to compact rows"><span class="list-density-icon" aria-hidden="true">↕</span><span class="list-density-label">Compact</span></button>
+          <button id="exportListButton" class="button excel-action compact action-button" title="Export list" aria-label="Export list"><span class="action-icon icon-excel" aria-hidden="true"></span><span class="action-label">Export list</span></button>
+        </div>
+      </div>
+      <div class="list-head">
+        <div id="selectAllHead" class="check-slot hidden"><input id="selectAllCheckbox" type="checkbox" checked aria-label="Select all"></div>
+        <div class="case-app-head">Application no.</div>
+        <div class="case-ref-head">Case ref</div>
+        <div class="case-time-head">Last scraped</div>
+        <button id="refreshAllButton" class="header-icon-button header-refresh" type="button" title="Scrape all queued applications" aria-label="Scrape all queued applications"><span class="action-icon icon-refresh" aria-hidden="true"></span></button>
+        <button id="clearAllButton" class="header-icon-button header-trash" type="button" title="Clear all applications" aria-label="Clear all applications"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3m-9 0 1 13h10l1-13M10 11v6m4-6v6"/></svg></button>
+      </div>
+      <div id="caseList" class="case-list"></div>
+      <div id="emptyList" class="empty-list">
+        <div class="empty-icon">⌕</div>
+        <strong>No applications loaded</strong>
+        <span>Add an application number or IP/PR reference below.</span>
+      </div>
+      <section class="input-bar">
+        <div class="input-shell">
+          <span class="search-icon">＋</span>
+          <textarea id="applicationInput" rows="1" wrap="soft" placeholder="Application no. or IP/PR case ref" autocomplete="off" spellcheck="false" aria-label="Application numbers or IP/PR case references"></textarea>
+          <button id="addButton" class="button dark">Add</button>
+        </div>
+      </section>
+    </aside>
+
+    <div id="workspaceResizer" class="workspace-resizer" role="separator" aria-label="Resize case list and record details" aria-orientation="vertical" tabindex="0"></div>
+
+    <section class="detail-panel">
+      <div id="detailEmpty" class="detail-empty">
+        <div class="document-icon">▤</div>
+        <h2>Select an application</h2>
+        <p>Its latest parsed data and every stored version will appear here.</p>
+      </div>
+      <div id="detailContent" class="detail-content hidden">
+        <div class="detail-sticky">
+          <div class="detail-heading">
+            <div class="detail-identity">
+              <div class="detail-title-line">
+                <h2 id="detailApplicationNo"></h2>
+                <span id="detailRecordType" class="record-type-tag"></span>
+                <span id="detailCaseRef" class="case-ref-badge hidden"></span>
+              </div>
+              <div class="detail-status-line"><span id="detailStatus" class="status-tag"></span></div>
+            </div>
+            <div class="detail-actions">
+              <div class="publication-quick-actions" aria-label="Available publication documents">
+                <button id="publicationAButton" class="button publication-action" data-publication-category="publication_a" aria-label="Publication A" disabled><span class="publication-label-full">Publication A</span><span class="publication-label-short">Pub A</span><span class="publication-label-tiny">A</span><span class="publication-count">—</span></button>
+                <button id="publicationBButton" class="button publication-action" data-publication-category="publication_b" aria-label="Publication B" disabled><span class="publication-label-full">Publication B</span><span class="publication-label-short">Pub B</span><span class="publication-label-tiny">B</span><span class="publication-count">—</span></button>
+                <button id="annuityButton" class="button publication-action" data-publication-category="annuity" aria-label="Annuity" disabled><span class="publication-label-full">Annuity</span><span class="publication-label-short">Ann</span><span class="publication-label-tiny">Ann</span><span class="publication-count">—</span></button>
+              </div>
+              <button id="scrapeOneButton" class="button scrape-primary action-button icon-only" title="Scrape this application" aria-label="Scrape this application"><span class="action-icon icon-refresh" aria-hidden="true"></span></button>
+              <button id="exportOneButton" class="button excel-action action-button icon-only" title="Export this application to Excel" aria-label="Export this application to Excel"><span class="action-icon icon-excel" aria-hidden="true"></span></button>
+              <button id="printPdfButton" class="button print-pdf action-button icon-only" title="Print this application" aria-label="Print this application"><svg class="action-icon icon-print" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8V4h10v4M7 17H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2M7 14h10v7H7zM17 12h1"/></svg></button>
+              <button id="downloadPdfButton" class="button pdf-export action-button icon-only" title="Download this application as PDF" aria-label="Download this application as PDF"><span class="action-icon icon-pdf" aria-hidden="true"></span></button>
+            </div>
+          </div>
+          <div class="snapshot-strip">
+            <div>
+              <span class="snapshot-label">Viewing snapshot</span>
+              <select id="snapshotSelect"></select>
+            </div>
+            <div id="changeSummary" class="change-summary"></div>
+          </div>
+        </div>
+        <header id="printReportHeader" class="print-report-header" aria-hidden="true">
+          <div class="print-report-brand">WipoPublish Vietnam</div>
+          <h1 id="printReportApplicationNo"></h1>
+          <div class="print-report-meta">
+            <span id="printReportType"></span>
+            <span id="printReportStatus"></span>
+            <span id="printReportSnapshot"></span>
+          </div>
+        </header>
+        <div id="recordMedia" class="record-media hidden"></div>
+        <div id="fieldGrid" class="field-grid"></div>
+        <div id="structuredDetails" class="structured-details"></div>
+        <section class="timeline-section">
+          <div class="section-heading"><h3>Procedural timeline</h3><span id="timelineCount"></span></div>
+          <div id="timeline" class="timeline"></div>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <footer class="statusbar">
+    <div id="runStatus"><span class="status-dot ready"></span> Ready</div>
+    <button id="toggleLogButton" class="log-toggle">Activity log</button>
+  </footer>
+  <section id="logDrawer" class="log-drawer hidden"><pre id="logOutput"></pre></section>
+  <div id="toast" class="toast hidden"></div>
+  <div id="publicationModal" class="modal-backdrop publication-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="publicationModalTitle">
+    <div class="publication-modal">
+      <div class="publication-modal-heading">
+        <div>
+          <h2 id="publicationModalTitle">Publication PDF</h2>
+          <div id="publicationModalMeta" class="publication-modal-meta"></div>
+          <div id="publicationTabs" class="publication-tabs" role="tablist" aria-label="Publication document type">
+            <button type="button" data-publication-category="publication_a">Publication A <span>0</span></button>
+            <button type="button" data-publication-category="publication_b">Publication B <span>0</span></button>
+            <button type="button" data-publication-category="annuity">Annuity <span>0</span></button>
+          </div>
+        </div>
+        <select id="publicationDocumentSelect" class="publication-document-select hidden" aria-label="Choose publication document"></select>
+        <button id="closePublicationModalButton" class="modal-close" type="button" aria-label="Close publication PDF">×</button>
+      </div>
+      <div class="publication-viewer-shell">
+        <div id="publicationLoading" class="publication-loading">Loading publication PDF…</div>
+        <div id="publicationPages" class="publication-pages" aria-label="Publication PDF viewer"></div>
+      </div>
+    </div>
+  </div>
+  <div id="clearAllModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="clearAllTitle">
+    <div class="confirm-modal">
+      <div class="confirm-modal-heading">
+        <h2 id="clearAllTitle">Clear case list</h2>
+        <button id="closeClearAllButton" class="modal-close" type="button" aria-label="Close">×</button>
+      </div>
+      <p>This removes every application from the visible case list. Stored snapshots remain in SQLite.</p>
+      <label for="clearAllInput">Type <strong>clear</strong> to continue</label>
+      <div class="confirm-input-row">
+        <input id="clearAllInput" type="text" autocomplete="off" spellcheck="false" placeholder="clear">
+        <button id="clearAllInputReset" class="input-clear-button hidden" type="button" aria-label="Clear confirmation text">×</button>
+      </div>
+      <div class="confirm-modal-actions">
+        <button id="cancelClearAllButton" class="button outline" type="button">Cancel</button>
+        <button id="confirmClearAllButton" class="button danger-solid" type="button" disabled>Clear list</button>
+      </div>
+    </div>
+  </div>
+  <div id="removeListModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="removeListTitle">
+    <div class="confirm-modal">
+      <div class="confirm-modal-heading">
+        <h2 id="removeListTitle">Remove saved list</h2>
+        <button id="closeRemoveListButton" class="modal-close" type="button" aria-label="Close">×</button>
+      </div>
+      <p id="removeListMessage"></p>
+      <p>Only this browser's saved list is removed. Stored snapshots remain in SQLite.</p>
+      <label for="removeListInput">Type <strong>remove</strong> to continue</label>
+      <input id="removeListInput" type="text" autocomplete="off" spellcheck="false" placeholder="remove">
+      <div class="confirm-modal-actions">
+        <button id="cancelRemoveListButton" class="button outline" type="button">Cancel</button>
+        <button id="confirmRemoveListButton" class="button danger-solid" type="button" disabled>Remove list</button>
+      </div>
+    </div>
+  </div>
+  <div id="typographyModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="typographyTitle">
+    <div class="typography-modal">
+      <div class="confirm-modal-heading">
+        <div>
+          <h2 id="typographyTitle">Typography settings</h2>
+          <p>Customize fonts and text sizes for this browser.</p>
+        </div>
+        <button id="closeTypographyButton" class="modal-close" type="button" aria-label="Close typography settings">×</button>
+      </div>
+      <div class="typography-grid">
+        <div class="typography-grid-head">Area</div><div class="typography-grid-head">Font</div><div class="typography-grid-head">Size</div>
+        <label for="interfaceFontSelect"><strong>Interface</strong><span>Buttons, lists and controls</span></label>
+        <select id="interfaceFontSelect" aria-label="Interface font"></select>
+        <label class="font-size-control"><input id="interfaceFontSize" type="number" min="10" max="20" step="1" value="13" aria-label="Interface font size"><span>px</span></label>
+        <label for="headerFontSelect"><strong>Headers</strong><span>Titles and section headings</span></label>
+        <select id="headerFontSelect" aria-label="Header font"></select>
+        <label class="font-size-control"><input id="headerFontSize" type="number" min="12" max="32" step="1" value="16" aria-label="Header font size"><span>px</span></label>
+        <label for="contentFontSelect"><strong>Contents</strong><span>Fields, tables and timeline</span></label>
+        <select id="contentFontSelect" aria-label="Content font"></select>
+        <label class="font-size-control"><input id="contentFontSize" type="number" min="9" max="24" step="1" value="13" aria-label="Content font size"><span>px</span></label>
+      </div>
+      <div class="typography-preview">
+        <strong>Preview heading</strong>
+        <span>Class 05: Dược phẩm · Patent and trademark record content</span>
+      </div>
+      <div class="confirm-modal-actions">
+        <button id="resetTypographyButton" class="button outline" type="button">Reset defaults</button>
+        <button id="saveTypographyButton" class="button dark" type="button">Done</button>
+      </div>
+    </div>
+  </div>
+  <script src="lan-bridge.js"></script>
+  <script type="module" src="publication-viewer.mjs"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>

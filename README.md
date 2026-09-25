@@ -1,5 +1,15 @@
 # WIPO Data Scraper - Enhanced Version
 
+## WipoPublish Vietnam Search GUI
+
+Run `npm install` once, then `npm run gui`. The tracker accepts one Vietnam application number or a TXT/TSV/CSV list, displays the loaded cases in a clickable list, and stores every new scrape as a timestamped SQLite snapshot in `data/WIPO_Application_History.sqlite`.
+
+The right pane shows the fully parsed record. Fields changed since the preceding snapshot are highlighted; hover a highlighted field to see its values at every stored timestamp. `Export page` creates an Excel workbook for the open case. `Export list` enters selection mode (all rows ticked by default); click `Export selected` to create a workbook containing the chosen latest records and their change history.
+
+### LAN Hub
+
+The Unified LAN Hosting Hub exposes this tracker at `/wipo-application-tracker/`. Run `npm run lan` only for standalone development; normally the Hosting Hub starts and monitors it. All LAN clients share the host's SQLite history. Scrape requests are serialized because the underlying scraper uses one shared input file, and overlapping requests for the same application are coalesced so one update serves every waiting user.
+
 An improved web scraper for extracting intellectual property data (Patents, Trademarks, and Designs) from the Vietnamese WIPO website.
 
 ## 🚀 Key Improvements Made

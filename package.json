@@ -1,12 +1,14 @@
 {
-  "name": "wipo-scraper",
+  "name": "wipopublish-vietnam-search",
   "version": "2.0.0",
-  "description": "Enhanced WIPO intellectual property data scraper",
-  "main": "index.js",
+  "description": "WipoPublish Vietnam Search with shared scrape history and Excel export",
+  "main": "electron/main.js",
   "scripts": {
-    "start": "node index.js",
+    "start": "electron .",
     "gui": "electron electron/main.js",
-    "test": "node test_server.js",
+    "lan": "electron lan-server.js",
+    "test": "node --test tests",
+    "test:db": "node --test tests/database.test.js",
     "recover": "node recover.js",
     "monitor": "node monitor.js",
     "watch": "node monitor.js --watch",
@@ -17,12 +19,17 @@
     "lookup:gui": "electron electron/lookup-main.js"
   },
   "dependencies": {
+    "exceljs": "^4.4.0",
     "fetch-cookie": "^3.1.0",
     "jsdom": "^26.1.0",
     "p-limit": "^6.2.0",
+    "pdfjs-dist": "^4.10.38",
     "puppeteer": "^24.15.0",
     "tough-cookie": "^6.0.0",
     "undici": "^7.13.0"
+  },
+  "devDependencies": {
+    "electron": "^41.7.1"
   },
   "keywords": [
     "scraping",

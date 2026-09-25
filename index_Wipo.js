@@ -2,6 +2,8 @@ const fs = require("fs");
 const path = require("path");
 const { JSDOM } = require("jsdom");
 const readline = require("readline");
+const { parseCitedDocuments } = require("./tracker_core");
+const { extractTrademarkFields } = require("./trademark_detail_parser");
 
 // Workaround for WIPO certificate-chain issues on some environments.
 // Set WIPO_ALLOW_INSECURE_TLS=0 to disable this behavior.
@@ -47,8 +49,8 @@ function loadPresets() {
       {
         name: "Balanced (Default)",
         THREAD_COUNT: 5,
-        RETRY_LIMIT: 30,
-        MAX_REATTEMPTS: 15,
+        RETRY_LIMIT: 10,
+        MAX_REATTEMPTS: 10,
         MAX_CONCURRENT_REQUESTS: 3,
         BETWEEN_REQUEST: 2000,
         RETRY_DELAY_BASE: 1000,
@@ -95,6 +97,17 @@ function parsePresetIndexFromArgs() {
   }
 
   return null;
+}
+
+function parseRetryCountFromArgs() {
+  const eqArg = process.argv.find((arg) => String(arg).startsWith("--retry-count="));
+  const raw = eqArg ? eqArg.split("=")[1] : (() => {
+    const index = process.argv.findIndex((arg) => String(arg) === "--retry-count");
+    return index >= 0 ? process.argv[index + 1] : undefined;
+  })();
+  if (raw === undefined) return null;
+  const value = Number.parseInt(String(raw), 10);
+  return Number.isNaN(value) ? null : Math.min(50, Math.max(0, value));
 }
 
 function getPresetByIndex(presetIndex) {
@@ -157,8 +170,8 @@ async function promptNewPreset() {
   console.log("\n\x1b[90mEnter configuration values (press Enter for suggested defaults):\x1b[0m\n");
   
   const threadCount = await promptUser("Thread count [5]: ") || "5";
-  const retryLimit = await promptUser("Retry limit (global passes) [30]: ") || "30";
-  const maxReattempts = await promptUser("Max re-attempts per ID [15]: ") || "15";
+  const retryLimit = await promptUser("Retry passes after the first two attempts [10]: ") || "10";
+  const maxReattempts = await promptUser("Re-attempts per ID [10]: ") || "10";
   const maxConcurrent = await promptUser("Max concurrent requests [3]: ") || "3";
   const betweenRequest = await promptUser("Delay between requests (ms) [2000]: ") || "2000";
   const retryDelayBase = await promptUser("Retry delay base (ms) [1000]: ") || "1000";
@@ -405,6 +418,7 @@ class ScrapingState {
 }
 
 const scrapingState = new ScrapingState();
+const FORCE_RESCRAPE = process.argv.includes("--force-rescrape");
 
 // === Helper function to get today's date in YYYY-MM-DD format ===
 function getTodayDateString() {
@@ -417,7 +431,9 @@ function getTodayDateString() {
 
 // === Set up unified output folder structure
 const todayDate = getTodayDateString();
-const baseOutputDir = path.join(__dirname, "Output", todayDate);
+const baseOutputDir = process.env.WIPO_OUTPUT_DIR
+  ? path.resolve(process.env.WIPO_OUTPUT_DIR)
+  : path.join(__dirname, "Output", todayDate);
 fs.mkdirSync(baseOutputDir, { recursive: true });
 
 // === Type-specific output files ===
@@ -626,10 +642,13 @@ function parsePriorityDetails(value) {
       }
       : null;
 
+    const identity = String(parsed.number || "").match(/^([A-Z]{2})\s+(.+)$/i);
     return {
       order: index + 1,
       raw: row,
       priority_no: parsed.number,
+      priority_country: identity ? identity[1].toUpperCase() : "",
+      priority_number: identity ? identity[2].trim() : parsed.number,
       priority_date_text: parsed.date_text,
       priority_date: priorityDate,
     };
@@ -712,7 +731,7 @@ function splitPeopleWithOrder(rawPeople) {
 
 function extractCanonicalApplicationNo(value) {
   const text = String(value || "").toUpperCase();
-  const match = text.match(/([1-4]-\d{4}-\d{4,})/);
+  const match = text.match(/([1-5]-\d{4}-\d{4,})/);
   return match ? match[1] : "";
 }
 
@@ -773,8 +792,11 @@ function buildStructuredJsonRecord(type, id, outputData) {
   const ipcClassifications = parseClassificationList(fields["(51) Phân loại IPC"]);
   const cpcClassifications = parseClassificationList(fields["Phân loại CPC"]);
   const representativesOrdered = parseNamedAddressList(fields["(74) Đại diện SHCN"] || fields["(740) Đại diện SHCN"], "representative");
-  const title = stripViPrefix(fields["(54) Tên"] || fields["(54) Tên kiểu dáng"] || fields["(571) Nhãn hiệu"]);
+  const title = stripViPrefix(fields["(54) Tên"] || fields["(54) Tên kiểu dáng"] || fields["(541) Nhãn hiệu"] || fields["(571) Nhãn hiệu"]);
   const abstract = stripViPrefix(fields["(57) Tóm tắt"] || fields["Tóm tắt"] || "");
+
+  const citedDocumentLabel = Object.keys(fields).find((label) => label.startsWith("(58)"));
+  const citedDocuments = parseCitedDocuments(citedDocumentLabel ? fields[citedDocumentLabel] : "");
 
   const splitFields = {
     grant_number_date: grantNumberDate,
@@ -791,6 +813,7 @@ function buildStructuredJsonRecord(type, id, outputData) {
     representatives_ordered: representativesOrdered,
     title,
     abstract,
+    cited_documents: citedDocuments,
   };
 
   const inventorRaw =
@@ -848,6 +871,12 @@ function flushAllJsonOutputs() {
   for (const type of Object.keys(outputJsonFiles)) {
     flushJsonOutput(type);
   }
+}
+
+function emitStructuredRecord(record) {
+  if (!record || typeof process.send !== "function") return;
+  try { process.send({ type: "wipo-record", record }); }
+  catch (_error) { /* The final JSON import remains the delivery fallback. */ }
 }
 
 // === Global tracking file for all scraped data with run date ===
@@ -919,7 +948,7 @@ function extractScrapedIDsFromFile(filePath) {
       
       for (const line of lines) {
         // Look for ID patterns in the content (format: 1-YYYY-XXXXX, 2-YYYY-XXXXX, etc.)
-        const idMatch = line.match(/(?:^|\W)([1-4]-\d{4}-\d{5})(?:\W|$)/);
+        const idMatch = line.match(/(?:^|\W)([1-5]-\d{4}-\d{4,})(?:\W|$)/);
         if (idMatch) {
           scrapedIDs.add(idMatch[1]);
         }
@@ -963,9 +992,9 @@ const config = {
   },
   DATA_TYPE: "TRADEMARK", // default fallback for extract logic
   path: {
-    data: "ID_WIPO.txt",
+    data: path.resolve(process.env.WIPO_INPUT_FILE || path.join(__dirname, "ID_WIPO.txt")),
     log: path.join(baseOutputDir, "log.txt"),
-    failedIDs: "failed_ids.txt",
+    failedIDs: path.join(baseOutputDir, "failed_ids.txt"),
   },
   THREAD_COUNT: 10, // Number of concurrent threads
   RETRY_LIMIT: 20, // Reduced from 30 for faster processing (global retry passes)
@@ -986,7 +1015,7 @@ const config = {
 };
 
 // === Initialize output structure and check for existing data ===
-const outputFileStructure = loadAlreadyScrapedIDs();
+const outputFileStructure = FORCE_RESCRAPE ? outputFiles : loadAlreadyScrapedIDs();
 initializeJsonOutputs();
 
 // === Load IDs with deduplication and filter out already scraped ones ===
@@ -1001,7 +1030,7 @@ const uniqueInputIDs = [...new Set(allIDs)];
 const duplicatesRemoved = allIDs.length - uniqueInputIDs.length;
 
 // Filter out already scraped IDs
-let IDs = uniqueInputIDs.filter(id => !scrapingState.alreadyScrapedIDs.has(id));
+let IDs = FORCE_RESCRAPE ? uniqueInputIDs : uniqueInputIDs.filter(id => !scrapingState.alreadyScrapedIDs.has(id));
 
 // Store total unique IDs for proper progress tracking
 scrapingState.totalUniqueIDs = uniqueInputIDs.length;
@@ -1026,6 +1055,7 @@ function getTypeById(id) {
     case "3":
       return "DESIGNS";
     case "4":
+    case "5":
       return "TRADEMARKS";
     default:
       return "TRADEMARKS";
@@ -1152,7 +1182,7 @@ async function start() {
   }
 
   // Handle failed IDs with retry
-  if (scrapingState.failedQueue.length > 0) {
+  if (scrapingState.failedQueue.length > 0 && config.RETRY_LIMIT > 1) {
     // Handle retries silently during clean logging
     
     const retryStartTime = Date.now();
@@ -1181,7 +1211,7 @@ async function start() {
 
     // Final failed IDs handling
     await handleFinalFailedIDs();
-  }
+  } else if (scrapingState.failedQueue.length > 0) await handleFinalFailedIDs();
 
   // Stop clean logging and restore console
   stopCleanLogging();
@@ -1210,6 +1240,7 @@ async function handleFinalFailedIDs() {
       fs.appendFileSync(typeSpecificFile, noDataEntry);
       fs.appendFileSync(config.path.failedIDs, `${id}\n`);
       fs.appendFileSync(failIdPath, `${id}\n`);
+      scrapingState.markIDAsFailedPermanently(id);
     }
   } else {
     originalConsole.log(`\n✅ All previously failed IDs succeeded on retry!`);
@@ -1566,6 +1597,7 @@ function extractDataThenContinue(i, text) {
     if (structured) {
       jsonOutputStore[type].push(structured);
       jsonFlushCounters[type] += 1;
+      emitStructuredRecord(structured);
       if (jsonFlushCounters[type] % 200 === 0) {
         flushJsonOutput(type);
       }
@@ -1899,76 +1931,10 @@ function extractDesignData(doc) {
 
 function extractTrademarkData(doc) {
   const outputPath = outputFiles["TRADEMARKS"];
-  let accordion1aData = Array.from(
-    doc.querySelectorAll(".product-form-details")
-  ).map((row, index) => {
-    // Get the matching label (to the left of the details)
-    const labelEl = row.previousElementSibling;
-    const labelText =
-      labelEl && labelEl.classList.contains("product-form-label")
-        ? labelEl.textContent.trim()
-        : "";
-
-    // Special handling for (400)
-    if (labelText === "(400) Số công bố và ngày công bố") {
-      // Each .row inside this cell
-      const rows = row.querySelectorAll(".row");
-      if (rows.length) {
-        return Array.from(rows)
-          .map((r) =>
-            Array.from(r.querySelectorAll(".col-md-4"))
-              .map((col) => col.textContent.trim())
-              .filter(Boolean)
-              .join(" ")
-          )
-          .filter(Boolean)
-          .join(" | ");
-      }
-      // fallback: just plain text
-      return row.textContent.trim();
-    }
-
-    // (300) Priority data, as before
-    if (labelText === "(300) Chi tiết về dữ liệu ưu tiên") {
-      const parts = Array.from(
-        row.querySelectorAll(".col-md-6, .col-md-4, span")
-      )
-        .map((el) => el.textContent.trim())
-        .filter(Boolean);
-      return parts.join(" | ");
-    }
-
-    // (531) Phân loại hình - as before
-    if (labelText === "(531) Phân loại hình") {
-      const allRows = row.querySelectorAll(".row");
-      if (allRows.length) {
-        return Array.from(allRows)
-          .map((r) => r.textContent.trim())
-          .filter(Boolean)
-          .join(" | ");
-      }
-      return row.textContent.trim();
-    }
-
-    // Group/class (Nhóm) at index 10 (old code)
-    if (index === 10) {
-      let combinedText = Array.from(row.querySelectorAll(".row"))
-        .map((childRow) => {
-          let col2 = childRow.querySelector(".col-md-2");
-          let col10 = childRow.querySelector(".col-md-10");
-          let col2Text = col2 ? col2.textContent.trim() : "";
-          let col10Text = col10 ? col10.textContent.trim() : "";
-          // Add zero padding
-          let classNum = col2Text.replace(/\D/g, "");
-          let classNumPadded = classNum ? classNum.padStart(2, "0") : col2Text;
-          return `Class/Nhóm ${classNumPadded}: ${col10Text}`;
-        })
-        .join("<lf>");
-      return combinedText;
-    } else {
-      return row.textContent.trim();
-    }
-  });
+  const extractedFields = extractTrademarkFields(doc);
+  let accordion1aData = TYPE_FIELD_LABELS.TRADEMARKS.map(
+    (label) => extractedFields[label] || ""
+  );
 
   // [rest of your function as before...]
   let imgURL = "no image";
@@ -2135,6 +2101,20 @@ function extractPatentData(doc) {
     "(58) Các tài liệu đối chứng",
   ];
 
+  const citedDocumentsLabel = FIELD_LABELS.find((label) => label.startsWith("(58)"));
+  PATENT_LABEL_HANDLERS[citedDocumentsLabel] = (row) => {
+    const bodyRows = Array.from(row.querySelectorAll("tbody tr"));
+    const rows = bodyRows.length
+      ? bodyRows
+      : Array.from(row.querySelectorAll("tr")).filter((tr) => tr.querySelectorAll("td").length);
+    if (!rows.length) return row.textContent.trim();
+    return rows
+      .map((tr) => Array.from(tr.querySelectorAll("td")).map((cell) => cell.textContent.trim()))
+      .filter((cells) => cells.some(Boolean))
+      .map((cells) => cells.join("<t>"))
+      .join("<lf>");
+  };
+
   // 3. Build label->row map for fast lookup
   const allDetailRows = Array.from(
     doc.querySelectorAll(".product-form-details")
@@ -2281,6 +2261,14 @@ async function postCheckAndRetry(maxRetries = 3) {
                 // Thread-safe file writing to type-specific file
                 const typeSpecificFile = outputFiles[type];
                 fs.appendFileSync(typeSpecificFile, formattedData);
+
+                const structured = buildStructuredJsonRecord(type, id, outputData);
+                if (structured) {
+                  jsonOutputStore[type].push(structured);
+                  jsonFlushCounters[type] += 1;
+                  emitStructuredRecord(structured);
+                  if (jsonFlushCounters[type] % 200 === 0) flushJsonOutput(type);
+                }
                 
                 // Write to global tracking
                 writeToGlobalTracking(id, type, outputData);
@@ -2354,7 +2342,7 @@ async function simpleRetryLoop() {
   // Starting simple retry process...
   
   let retryAttempt = 1;
-  const maxRetryAttempts = 10; // Increased from 5 to allow more retry passes
+  const maxRetryAttempts = Math.max(0, Number(config.RETRY_LIMIT || 1) - 1);
   
   while (retryAttempt <= maxRetryAttempts) {
     // Get list of missing IDs by comparing original list with output
@@ -2490,6 +2478,14 @@ async function main() {
     
     // Step 2: Apply preset to config
     applyPresetToConfig(selectedPreset);
+    const retryCount = parseRetryCountFromArgs();
+    if (retryCount !== null) {
+      config.RETRY_LIMIT = retryCount;
+      config.MAX_REATTEMPTS = retryCount;
+    }
+    if (process.env.WIPO_LAN_FAIL_FAST === "1") {
+      config.timeout.REQUEST_TIMEOUT = Math.min(config.timeout.REQUEST_TIMEOUT, 15000);
+    }
     
     // Display applied configuration
     console.log("\x1b[1m\x1b[36m=== Applied Configuration ===\x1b[0m");
@@ -2525,7 +2521,7 @@ async function main() {
     await start();
     
     // Simple retry loop instead of complex post-processing
-    await simpleRetryLoop();
+    if (process.env.WIPO_SKIP_POST_RETRY !== "1") await simpleRetryLoop();
     
     // Generate final comprehensive report
     generateFinalReport();
