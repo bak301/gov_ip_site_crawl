@@ -2,6 +2,7 @@
 
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { resolveWipoHistoryPath } = require('./wipo_history_path');
 
 function parseArguments(argv) {
     const args = { input: null, db: null };
@@ -11,7 +12,7 @@ function parseArguments(argv) {
         else if (!args.input) args.input = argv[index];
     }
     args.input = path.resolve(args.input || path.join(__dirname, 'WIPO_NextPage_Global_Tracking.txt'));
-    args.db = path.resolve(args.db || path.join(__dirname, 'WIPO_Application_History.sqlite'));
+    args.db = args.db ? path.resolve(args.db) : resolveWipoHistoryPath();
     return args;
 }
 

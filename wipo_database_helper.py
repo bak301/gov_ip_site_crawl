@@ -26,6 +26,9 @@ for _stream in (sys.stdin, sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8")
 
 
+PATENT_DETAIL_FIELDS = ("gazette_number", "abstract", "thumbnail_url", "application_subtype")
+OPTIONAL_FIELDS = (*PATENT_DETAIL_FIELDS, "bibliographic_source")
+
 DATA_FIELDS = (
     "record_id",
     "mode",
@@ -44,11 +47,17 @@ DATA_FIELDS = (
     "priority_country",
     "priority_number",
     "priority_date",
+    "representative",
+    *OPTIONAL_FIELDS,
 )
 APPLICATION_RE = re.compile(r"\b(?:[A-Z]{2,5}-)?\d{1,2}-\d{4}-\d{4,}\b", re.I)
 DATE_RE = re.compile(r"\b\d{2}\.\d{2}\.\d{4}\b")
 SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
 MOJIBAKE_MARKERS = ("Ã", "Â", "Ä", "Æ", "â", "ð", "ï", "�")
+
+
+def is_patent_registration_placeholder(value: Any) -> bool:
+    return bool(re.fullmatch(r"[12]-", str(value or "").strip()))
 
 
 def mojibake_score(value: str) -> int:
@@ -151,6 +160,7 @@ def normalize_record(row: list[Any], mode: Any) -> dict[str, str]:
             "title", "application_number", "filing_date", "publication_number",
             "publication_date", "registration_number", "registration_date",
             "classification_primary", "applicant_owner", "creator", "status",
+            "priority_country", "priority_number", "priority_date", *OPTIONAL_FIELDS,
         )
     else:
         fields = (
@@ -161,15 +171,20 @@ def normalize_record(row: list[Any], mode: Any) -> dict[str, str]:
 
     for field, value in zip(fields, values[1:]):
         record[field] = value
+    if record["mode"] in ("Trademarks", "Designs") and len(values) > len(fields) + 1:
+        record["representative"] = values[len(fields) + 1]
     record["application_number"] = extract_application_number(record["application_number"])
     if not record["application_number"]:
         record["application_number"] = f"ID:{record['record_id']}"
+    elif record["mode"] == "Patents" and re.fullmatch(r"VN-[12]-\d{4}-\d{5,}", record["application_number"]):
+        record["application_number"] = record["application_number"].removeprefix("VN-")
     return record
 
 
 def stable_json(record: dict[str, str]) -> str:
     return json.dumps(
-        {field: clean(record.get(field)) for field in DATA_FIELDS},
+        {field: clean(record.get(field)) for field in DATA_FIELDS
+         if field not in OPTIONAL_FIELDS or record.get(field)},
         ensure_ascii=False,
         separators=(",", ":"),
     )
@@ -177,7 +192,7 @@ def stable_json(record: dict[str, str]) -> str:
 
 def connect(database_path: Path) -> sqlite3.Connection:
     database_path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(database_path)
+    connection = sqlite3.connect(database_path, timeout=30)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA journal_mode=WAL")
     connection.execute("PRAGMA synchronous=NORMAL")
@@ -231,6 +246,15 @@ def create_schema(connection: sqlite3.Connection) -> None:
             );
         """
     )
+    fields = ("representative", *OPTIONAL_FIELDS)
+    existing = {row[1] for row in connection.execute("PRAGMA table_info(applications)")}
+    if not set(fields).issubset(existing):
+        with connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = {row[1] for row in connection.execute("PRAGMA table_info(applications)")}
+            for field in fields:
+                if field not in existing:
+                    connection.execute(f"ALTER TABLE applications ADD COLUMN {field} TEXT NOT NULL DEFAULT ''")
 
 
 def merge_records(
@@ -239,20 +263,50 @@ def merge_records(
     mode: Any,
     source: Any,
     observed_at: Any,
+    *,
+    fill_blanks_only: bool = False,
+    preserve_observation: bool = False,
 ) -> dict[str, int]:
     observed = normalize_timestamp(observed_at)
     source_text = clean(source)
     stats = {"inserted": 0, "updated": 0, "unchanged": 0, "historical": 0, "changes": 0}
 
     with connection:
+        # Reserve the writer before reading current rows for the merge.
+        if not connection.in_transaction:
+            connection.execute("BEGIN IMMEDIATE")
         for row in rows:
             record = normalize_record(row, mode)
-            data_json = stable_json(record)
-            content_hash = hashlib.sha256(data_json.encode("utf-8")).hexdigest()
             application_number = record["application_number"]
             current = connection.execute(
                 "SELECT * FROM applications WHERE application_number=?", (application_number,)
             ).fetchone()
+            if current is not None and record["mode"] == "Patents" and current["mode"] == "Patents":
+                # A sparse list page must not erase known data or attach a date to a different grant.
+                same_grant = not record["registration_number"] or record["registration_number"] == current["registration_number"]
+                record["filing_date"] = record["filing_date"] or clean(current["filing_date"])
+                record["registration_number"] = record["registration_number"] or clean(current["registration_number"])
+                if same_grant and not record["registration_date"]:
+                    record["registration_date"] = clean(current["registration_date"])
+                for field in ("title", "applicant_owner", "creator", "status", "classification_primary",
+                              "publication_number", "publication_date", *PATENT_DETAIL_FIELDS):
+                    if not record[field]:
+                        record[field] = clean(current[field])
+                priority_fields = ("priority_country", "priority_number", "priority_date")
+                if not any(record[field] for field in priority_fields):
+                    for field in priority_fields:
+                        record[field] = clean(current[field])
+                record["bibliographic_source"] = record["bibliographic_source"] or clean(current["bibliographic_source"])
+            if current is not None and fill_blanks_only:
+                for field in DATA_FIELDS:
+                    if field == "registration_number" and record[field] and is_patent_registration_placeholder(current[field]):
+                        continue
+                    record[field] = clean(current[field]) or record[field]
+            # Summary scrapes omit the representative; keep the detailed scrape value.
+            if current is not None and not record["representative"]:
+                record["representative"] = clean(current["representative"])
+            data_json = stable_json(record)
+            content_hash = hashlib.sha256(data_json.encode("utf-8")).hexdigest()
             snapshot_exists = connection.execute(
                 """
                 SELECT 1 FROM application_snapshots
@@ -294,6 +348,8 @@ def merge_records(
 
             first_seen = min(observed, current["first_seen_at"])
             last_seen = max(observed, current["last_seen_at"])
+            if preserve_observation:
+                first_seen, last_seen = current["first_seen_at"], current["last_seen_at"]
             if current["content_hash"] == content_hash:
                 connection.execute(
                     "UPDATE applications SET first_seen_at=?, last_seen_at=? WHERE application_number=?",
@@ -338,7 +394,8 @@ def merge_records(
                     updated_at=?, content_hash=?, data_json=?
                 WHERE application_number=?
                 """,
-                (*update_values, source_text, first_seen, last_seen, observed, content_hash, data_json, application_number),
+                (*update_values, current["source"] if preserve_observation else source_text,
+                 first_seen, last_seen, observed, content_hash, data_json, application_number),
             )
             stats["updated"] += 1
     return stats

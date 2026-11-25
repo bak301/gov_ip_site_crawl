@@ -4,14 +4,20 @@ const path = require('path');
 const readline = require('readline');
 const { spawnSync } = require('child_process');
 const { WipoDatabase } = require('./wipo_database');
+const { extractPatentListRecords } = require('./wipo_patent_list');
+const { resolveWipoHistoryPath } = require('./wipo_history_path');
 
 class WipoTrademarkScraper {
     constructor() {
         this.browser = null;
+        this.browserLaunch = null;
+        this.cleanupPending = null;
         this.page = null;
         this.browserExecutablePath = null;
         this.outputData = [];
         this.mode = null; // Will be set by user selection
+        const runId = process.env.WIPO_NEXT_PAGE_RUN_ID;
+        this.runId = /^[a-f\d-]{36}$/i.test(runId || '') ? runId : '';
         this.baseOutputDir = this.createOutputDirectory();
         
         // Cache for duplicate detection
@@ -38,7 +44,7 @@ class WipoTrademarkScraper {
                 name: 'Patents',
                 url: 'https://wipopublish.ipvietnam.gov.vn/wopublish-search/public/patents?query=*:*',
                 fileName: 'SC_Patents',
-                rowSelector: 'tr.odd, tr.even'
+                rowSelector: 'tr:is(.odd, .even):has(.rs-AFNB_ORI), .thumbnail .product-content:has(.rs-AFNB_ORI)'
             },
             3: {
                 name: 'Designs',
@@ -49,8 +55,8 @@ class WipoTrademarkScraper {
         };
         
         this.outputFile = null; // Will be set after mode selection
-        this.globalTrackingFile = path.join(__dirname, "WIPO_NextPage_Global_Tracking.txt");
-        this.databaseFile = path.join(__dirname, 'WIPO_Application_History.sqlite');
+        this.globalTrackingFile = path.join(this.runId ? this.baseOutputDir : __dirname, 'WIPO_NextPage_Global_Tracking.txt');
+        this.databaseFile = resolveWipoHistoryPath();
         this.database = new WipoDatabase(this.databaseFile);
         this.databaseStats = {
             inserted: 0,
@@ -70,7 +76,7 @@ class WipoTrademarkScraper {
                          String(today.getDate()).padStart(2, '0');
         
         console.log(`📅 Using date: ${todayDate}`);
-        const baseOutputDir = path.join(__dirname, 'Output', todayDate);
+        const baseOutputDir = path.join(__dirname, 'Output', todayDate, this.runId);
         if (!fs.existsSync(baseOutputDir)) {
             fs.mkdirSync(baseOutputDir, { recursive: true });
             console.log(`📁 Created output directory: ${baseOutputDir}`);
@@ -79,6 +85,14 @@ class WipoTrademarkScraper {
     }
 
     async selectMode() {
+        const argument = process.argv.slice(2).find((value) => value.startsWith('--mode='));
+        if (argument) {
+            const choice = Number(argument.slice('--mode='.length));
+            if (!Object.hasOwn(this.modeConfig, choice)) throw new Error('Choose mode 1 (Trademarks), 2 (Patents) or 3 (Designs).');
+            this.mode = choice;
+            this.outputFile = path.join(this.baseOutputDir, `${this.modeConfig[choice].fileName}_${this.todayDate}.txt`);
+            return;
+        }
         const rl = readline.createInterface({
             input: process.stdin,
             output: process.stdout
@@ -128,12 +142,13 @@ class WipoTrademarkScraper {
             console.log('The browser window is now open. Please:');
             console.log('1. Set up your search filters and criteria');
             console.log('2. Navigate to the search results page');
-            console.log('3. Switch to list view manually');
+            console.log(this.mode === 2 ? '3. Open the patent results in table or card view' : '3. Switch to list view manually');
             console.log('4. Configure pagination/view settings as needed');
             console.log('5. Make any other adjustments you want');
             console.log(`\n⚠️  Make sure you are on the page with ${config.name.toLowerCase()} list data before proceeding!`);
             console.log('\nWhen you are ready to start scraping the current page, press ENTER in this terminal...');
             
+            process.send?.({ type: 'prompt', stage: 'setup' });
             rl.question('Press ENTER to start scraping: ', () => {
                 console.log('\n🚀 Starting automatic scraping process...\n');
                 rl.close();
@@ -161,6 +176,7 @@ class WipoTrademarkScraper {
             console.log('4. Ensure the page is fully loaded');
             console.log('\n✅ When ready to continue, press ENTER...');
             
+            process.send?.({ type: 'prompt', stage: 'intervention' });
             rl.question('', () => {
                 console.log('🔄 Resuming automatic scraping...\n');
                 rl.close();
@@ -224,6 +240,7 @@ class WipoTrademarkScraper {
             return await this.page.evaluate(() => {
                 // Try multiple selectors for the pagination info
                 const selectors = [
+                    '#searchResultPanel .paginator .navigatorLabel',
                     'ul.paginator.search-result-display li.navigatorLabel.results-display-text div',
                     'ul.paginator li.navigatorLabel div',
                     '.results-display-text div',
@@ -249,7 +266,7 @@ class WipoTrademarkScraper {
                     const allDivs = document.querySelectorAll('div');
                     for (const div of allDivs) {
                         const divText = div.textContent.trim();
-                        if (divText.match(/Showing \d+ - \d+ of \d+ results/)) {
+                        if (divText.match(/Showing [\d,]+\s*[-–]\s*[\d,]+ of [\d,]+ results/i)) {
                             text = divText;
                             break;
                         }
@@ -258,14 +275,15 @@ class WipoTrademarkScraper {
                 
                 if (text) {
                     // Parse "Showing 1 - 50 of 895945 results" or similar patterns
-                    const match = text.match(/Showing (\d+) - (\d+) of (\d+) results/);
+                    const match = text.match(/Showing ([\d,]+)\s*[-–]\s*([\d,]+) of ([\d,]+) results/i);
                     if (match) {
+                        const [start, end, total] = match.slice(1).map((value) => Number(value.replace(/,/g, '')));
                         return {
                             text: text,
-                            start: parseInt(match[1]),
-                            end: parseInt(match[2]),
-                            total: parseInt(match[3]),
-                            currentRange: `${match[1]}-${match[2]}`,
+                            start,
+                            end,
+                            total,
+                            currentRange: `${start}-${end}`,
                             found: true,
                             selector: 'Found via pagination text'
                         };
@@ -398,6 +416,7 @@ class WipoTrademarkScraper {
             console.log('1. Press ENTER to continue anyway (will retry)');
             console.log('2. Press Ctrl+C to stop the scraper');
             
+            process.send?.({ type: 'prompt', stage: 'intervention' });
             rl.question('\nPress ENTER to continue: ', () => {
                 console.log('🔄 Continuing...\n');
                 rl.close();
@@ -419,14 +438,14 @@ class WipoTrademarkScraper {
                 const firstRow = rows[0];
                 const lastRow = rows[rows.length - 1];
                 
-                const firstId = firstRow.id || firstRow.querySelector('input[type="checkbox"]')?.value || '';
-                const lastId = lastRow.id || lastRow.querySelector('input[type="checkbox"]')?.value || '';
+                const firstId = firstRow.id || firstRow.querySelector('input[type="checkbox"]')?.value || firstRow.querySelector('.rs-AFNB_ORI')?.textContent.trim() || '';
+                const lastId = lastRow.id || lastRow.querySelector('input[type="checkbox"]')?.value || lastRow.querySelector('.rs-AFNB_ORI')?.textContent.trim() || '';
                 
                 // Create a signature from all row IDs
                 let signature = '';
                 for (let i = 0; i < Math.min(10, rows.length); i++) {
                     const row = rows[i];
-                    const id = row.id || row.querySelector('input[type="checkbox"]')?.value || '';
+                    const id = row.id || row.querySelector('input[type="checkbox"]')?.value || row.querySelector('.rs-AFNB_ORI')?.textContent.trim() || '';
                     signature += id + '|';
                 }
                 
@@ -455,7 +474,7 @@ class WipoTrademarkScraper {
                 let signature = '';
                 for (let i = 0; i < Math.min(5, rows.length); i++) {
                     const row = rows[i];
-                    const id = row.id || '';
+                    const id = row.id || row.querySelector('.rs-AFNB_ORI')?.textContent.trim() || '';
                     const firstCell = row.querySelector('td') ? row.querySelector('td').textContent.trim() : '';
                     signature += id + '|' + firstCell + '||';
                 }
@@ -496,7 +515,7 @@ class WipoTrademarkScraper {
         console.log('Initializing Puppeteer browser...');
         this.browserExecutablePath = this.getBrowserExecutablePath();
         console.log(`Using browser: ${this.browserExecutablePath}`);
-        this.browser = await puppeteer.launch({
+        this.browserLaunch = puppeteer.launch({
             executablePath: this.browserExecutablePath,
             headless: false, // Start with GUI for manual setup
             defaultViewport: null,
@@ -510,6 +529,7 @@ class WipoTrademarkScraper {
                 '--disable-gpu'
             ]
         });
+        this.browser = await this.browserLaunch;
 
         this.page = await this.browser.newPage();
         
@@ -542,7 +562,7 @@ class WipoTrademarkScraper {
         await this.browser.close();
         
         // Launch new headless browser
-        this.browser = await puppeteer.launch({
+        this.browserLaunch = puppeteer.launch({
             executablePath: this.browserExecutablePath || this.getBrowserExecutablePath(),
             headless: true, // Now in headless mode
             defaultViewport: null,
@@ -556,6 +576,7 @@ class WipoTrademarkScraper {
                 '--disable-gpu'
             ]
         });
+        this.browser = await this.browserLaunch;
 
         this.page = await this.browser.newPage();
         
@@ -618,6 +639,10 @@ class WipoTrademarkScraper {
             // Wait for content to load based on mode
             await this.page.waitForSelector(config.rowSelector, { timeout: 10000 });
             
+            if (this.mode === 2) {
+                return await this.page.evaluate(extractPatentListRecords, config.rowSelector);
+            }
+
             const extractedData = await this.page.evaluate((mode, rowSelector) => {
                 const rows = document.querySelectorAll(rowSelector);
                 const extractedData = [];
@@ -679,56 +704,6 @@ class WipoTrademarkScraper {
                             extractedData.push(data);
                         } catch (error) {
                             console.error('Error extracting data from trademark row:', error);
-                        }
-                    });
-                } else if (mode === 2) {
-                    // Patents extraction (similar to trademarks, adjust selectors as needed)
-                    rows.forEach((row, index) => {
-                        try {
-                            const id = row.id;
-                            if (!id) return;
-                            
-                            const data = [];
-                            data.push(id); // ID
-                            
-                            // Add patent-specific fields here
-                            // For now, using similar structure to trademarks
-                            const title = row.querySelector('.rs-TITL, .rs-MK');
-                            data.push(title ? title.textContent.trim() : '');
-                            
-                            const originalAppNum = row.querySelector('.rs-AFNB_ORI');
-                            data.push(originalAppNum ? originalAppNum.textContent.trim() : '');
-                            
-                            const appDate = row.querySelector('.rs-AFDT');
-                            data.push(appDate ? appDate.textContent.trim() : '');
-                            
-                            const pubNum = row.querySelector('.rs-GZNB, .rs-PBNB');
-                            data.push(pubNum ? pubNum.textContent.trim() : '');
-                            
-                            const pubDate = row.querySelector('.rs-PBDT');
-                            data.push(pubDate ? pubDate.textContent.trim() : '');
-                            
-                            const certNum = row.querySelector('.rs-RENB');
-                            data.push(certNum ? certNum.textContent.trim() : '');
-                            
-                            const issueDate = row.querySelector('.rs-REDT');
-                            data.push(issueDate ? issueDate.textContent.trim() : '');
-                            
-                            const ipcClass = row.querySelector('.rs-ICL');
-                            data.push(ipcClass ? ipcClass.textContent.trim() : '');
-                            
-                            const applicant = row.querySelector('.rs-APNA');
-                            data.push(applicant ? applicant.textContent.trim() : '');
-                            
-                            const inventor = row.querySelector('.rs-INNA');
-                            data.push(inventor ? inventor.textContent.trim() : '');
-                            
-                            const status = row.querySelector('.rs-STLB');
-                            data.push(status ? status.textContent.trim() : '');
-                            
-                            extractedData.push(data);
-                        } catch (error) {
-                            console.error('Error extracting data from patent row:', error);
                         }
                     });
                 } else if (mode === 3) {
@@ -905,7 +880,7 @@ class WipoTrademarkScraper {
                 }
 
                 // If all results are duplicates, increment consecutive duplicate counter
-                if (duplicateCheck.duplicates === pageData.length) {
+                if (this.mode !== 1 && duplicateCheck.duplicates === pageData.length) {
                     consecutiveDuplicatePages++;
                     console.log(`⚠️ All results on page ${currentPage} are duplicates (${consecutiveDuplicatePages}/${this.maxDuplicatePages})`);
                     
@@ -921,9 +896,11 @@ class WipoTrademarkScraper {
                     this.outputData.push(...duplicateCheck.uniqueResults);
                     this.addToCache(duplicateCheck.uniqueResults);
                     
-                    // Save page data immediately
-                    await this.savePageData(duplicateCheck.uniqueResults);
-                    console.log(`💾 Saved ${duplicateCheck.uniqueResults.length} new records to file`);
+                    // For trademarks, visit every page and let the SQL merge
+                    // update previously seen applications as well as new ones.
+                    const rowsToSave = this.mode === 1 ? pageData : duplicateCheck.uniqueResults;
+                    await this.savePageData(rowsToSave, duplicateCheck.uniqueResults);
+                    console.log(`💾 Saved ${rowsToSave.length} records to file`);
                 }
 
                 // Calculate and display timing information AFTER all processing is done
@@ -1014,7 +991,9 @@ class WipoTrademarkScraper {
                     
                     if (!clickResult.clicked) {
                         console.log('❌ Could not click next page button - it may have become disabled');
-                        break;
+                        await this.pauseForManualFix('Could not activate Next Page. Advance one page in the browser.');
+                        currentPage++;
+                        continue;
                     }
                     
                     console.log(`✅ Clicked next page button using selector: ${clickResult.selector}`);
@@ -1079,6 +1058,7 @@ class WipoTrademarkScraper {
                         console.log('2. Fix the issue manually and press ENTER to continue scraping');
                         console.log('3. Press Ctrl+C to stop immediately');
                         
+                        process.send?.({ type: 'prompt', stage: 'end-check' });
                         rl.question('\nPress ENTER when ready: ', () => {
                             rl.close();
                             // Check if next button exists after user intervention
@@ -1176,8 +1156,7 @@ class WipoTrademarkScraper {
                         console.log(`✅ Page info recovered: ${pageInfo.currentRange}`);
                         console.log('🔄 Continuing pagination from current position...');
                         
-                        // Continue the pagination loop (this will need manual continuation)
-                        // For now, we'll just continue with whatever data we have
+                        return this.handlePagination();
                     } else {
                         console.log('❌ Could not recover pagination info after manual fix');
                     }
@@ -1186,12 +1165,11 @@ class WipoTrademarkScraper {
                 }
             }
             
-            // Continue with whatever data we have
-            console.log('📊 Continuing with collected data...');
+            throw error;
         }
     }
 
-    async savePageData(pageData) {
+    async savePageData(pageData, exportData = pageData) {
         // Write header if file doesn't exist
         if (!fs.existsSync(this.outputFile)) {
             let headers = [];
@@ -1268,8 +1246,8 @@ class WipoTrademarkScraper {
         );
 
         // Append the compatibility text export after the durable database save.
-        pageData.forEach(record => {
-            fs.appendFileSync(this.outputFile, record.join('\t') + '\n');
+        exportData.forEach(record => {
+            fs.appendFileSync(this.outputFile, (this.mode === 2 ? record.slice(0, 12) : record).join('\t') + '\n');
         });
     }
 
@@ -1340,7 +1318,7 @@ class WipoTrademarkScraper {
         
         // Add data rows
         this.outputData.forEach(record => {
-            output += record.join('\t') + '\n';
+            output += (this.mode === 2 ? record.slice(0, 12) : record).join('\t') + '\n';
         });
         
         return output;
@@ -1365,7 +1343,7 @@ class WipoTrademarkScraper {
         this.outputData.forEach(record => {
             const id = record[0]; // ID is first column
             const source = `NextPage_${config.name}_Scraper`;
-            const dataString = record.slice(1).join('\t'); // All data except ID
+            const dataString = record.slice(1, this.mode === 2 ? 12 : undefined).join('\t'); // All data except ID
             const globalEntry = `${runDate}\t${id}\t${source}\t${config.name}\t${dataString}\n`;
             fs.appendFileSync(this.globalTrackingFile, globalEntry);
         });
@@ -1396,16 +1374,17 @@ class WipoTrademarkScraper {
         }
     }
 
-    async cleanup() {
-        if (this.browser) {
-            await this.browser.close();
-            console.log('Browser closed');
-        }
-        if (this.database) {
-            this.database.close();
-            this.database = null;
-            console.log('Database closed');
-        }
+    cleanup() {
+        this.cleanupPending ??= (async () => {
+            const browser = await this.browserLaunch?.catch(() => null);
+            try {
+                if (browser) await browser.close();
+            } finally {
+                this.database?.close();
+                this.database = null;
+            }
+        })();
+        return this.cleanupPending;
     }
 
     async run() {
@@ -1431,6 +1410,7 @@ class WipoTrademarkScraper {
             
         } catch (error) {
             console.error('Error during scraping:', error);
+            process.exitCode = 1;
         } finally {
             await this.cleanup();
         }
@@ -1473,8 +1453,41 @@ class WipoTrademarkScraper {
 async function main() {
     console.log('Starting WIPO Trademark Scraper...');
     const scraper = new WipoTrademarkScraper();
+    if (process.send) {
+        let stopping = false;
+        const stop = async () => {
+            if (stopping) return;
+            stopping = true;
+            try { await scraper.cleanup(); }
+            finally { process.exit(130); }
+        };
+        process.on('message', (message) => {
+            if (message?.type === 'stop') void stop();
+        });
+        process.once('disconnect', stop);
+    }
     await scraper.run();
     console.log('Scraping completed!');
+    if (scraper.mode === 1 &&
+        scraper.databaseStats.inserted + scraper.databaseStats.updated + scraper.databaseStats.unchanged > 0) {
+        // Renewal reads the compact trademark lookup. Keep it in step with the
+        // full history after each normally exiting trademark run; every page
+        // was committed to history before reaching here.
+        const syncScript = path.resolve(__dirname, '..', '28_Case_Table_Database', 'sync_wipo_history.py');
+        if (fs.existsSync(syncScript)) {
+            console.log('\nSyncing WipoPublish trademark history to Renewal lookup...');
+            const result = spawnSync(process.env.WIPO_PYTHON || 'python',
+                [syncScript, '--source', scraper.databaseFile], {
+                    encoding: 'utf8', windowsHide: true, maxBuffer: 4 * 1024 * 1024,
+                    env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' }
+                });
+            if (result.error || result.status !== 0) {
+                console.error(`Renewal lookup sync failed: ${result.error?.message || result.stderr?.trim() || `exit ${result.status}`}`);
+            } else {
+                console.log(`Renewal lookup synced: ${result.stdout.trim()}`);
+            }
+        }
+    }
     const publisher = process.env.TRADEMARK_API_PUBLISHER;
     const targetRoot = process.env.TRADEMARK_API_DATA_ROOT;
     if (publisher && targetRoot && scraper.completedSuccessfully) {
@@ -1508,4 +1521,13 @@ process.on('SIGTERM', async () => {
 });
 
 // Run the main function
-main().catch(console.error);
+main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+}).finally(() => {
+    process.removeAllListeners('disconnect');
+    if (process.connected) {
+        process.stdin.destroy();
+        process.disconnect();
+    }
+});

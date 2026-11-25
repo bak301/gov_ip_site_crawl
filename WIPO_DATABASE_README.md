@@ -2,6 +2,16 @@
 
 The scraper now stores its durable, queryable data in `WIPO_Application_History.sqlite`.
 The existing tab-separated tracking file remains unchanged for compatibility.
+The Next Page trademark mode visits pages until the portal disables Next; repeated
+records are merged in SQLite rather than ending the run early. After a normally exiting trademark run,
+the full history is synchronized into Renewal generation's
+`../28_Case_Table_Database/data/wipo_trademark_tracking.sqlite` lookup. The history
+remains the full record; the Renewal lookup is a normalized copy.
+
+Open **WIPO Next Page** from the desktop Open Hub to run the scraper and browse its records.
+The scraper uses `WIPO_SCRAPER_DATABASE` when set. It also recognizes the migrated
+`wipo/history/WIPO_Application_History.sqlite` under the configured database root.
+The file picker changes only the database displayed in the table. The Run action uses the configured scraper database.
 
 ## Tables
 

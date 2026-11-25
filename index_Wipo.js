@@ -8,6 +8,9 @@ const {
   parseMadridXml,
   fetchMadridXml,
 } = require("./madrid_monitor");
+const { inspectWipoResponse } = require("./wipo_response_validation");
+const { splitStructuredColumns } = require("./wipo_structured_columns");
+const { parseApplicantHistory } = require("../electron-app/wipo_applicant_history");
 
 // Workaround for WIPO certificate-chain issues on some environments.
 // Set WIPO_ALLOW_INSECURE_TLS=0 to disable this behavior.
@@ -101,6 +104,15 @@ function parsePresetIndexFromArgs() {
   }
 
   return null;
+}
+
+function parseRetryCountFromArgs() {
+  const eqArg = process.argv.find((arg) => String(arg).startsWith("--retry-count="));
+  const keyIndex = process.argv.findIndex((arg) => String(arg) === "--retry-count");
+  const raw = eqArg ? eqArg.split("=")[1] : (keyIndex >= 0 ? process.argv[keyIndex + 1] : null);
+  if (raw === null || raw === undefined) return null;
+  const value = Number.parseInt(String(raw), 10);
+  return Number.isNaN(value) ? null : Math.min(50, Math.max(0, value));
 }
 
 function getPresetByIndex(presetIndex) {
@@ -411,6 +423,24 @@ class ScrapingState {
 }
 
 const scrapingState = new ScrapingState();
+const invalidHttp200Attempts = new Map();
+const confirmedNotFoundIDs = new Set();
+
+function sendParentMessage(payload) {
+  if (typeof process.send !== "function") return;
+  try { process.send(payload); } catch { /* Parent may have closed while the scraper exits. */ }
+}
+
+function markConfirmedNotFound(id, attempts, reason = "HTTP 200 returned no usable WIPO record data") {
+  confirmedNotFoundIDs.add(id);
+  invalidHttp200Attempts.delete(id);
+  scrapingState.resetReattemptCount(id);
+  scrapingState.markIDAsFailedPermanently(id);
+  const entry = { applicationNo: id, attempts, reason, checkedAt: new Date().toISOString() };
+  fs.appendFileSync(path.join(baseOutputDir, "not_found.jsonl"), `${JSON.stringify(entry)}\n`, "utf8");
+  sendParentMessage({ type: "wipo-not-found", ...entry });
+  console.warn(`Not found: ${id} returned HTTP 200 without usable record data twice; no further retries will be made.`);
+}
 
 // === Helper function to get today's date in YYYY-MM-DD format ===
 function getTodayDateString() {
@@ -423,7 +453,9 @@ function getTodayDateString() {
 
 // === Set up unified output folder structure
 const todayDate = getTodayDateString();
-const baseOutputDir = path.join(__dirname, "Output", todayDate);
+const baseOutputDir = process.env.WIPO_OUTPUT_DIR
+  ? path.resolve(process.env.WIPO_OUTPUT_DIR)
+  : path.join(__dirname, "Output", todayDate);
 fs.mkdirSync(baseOutputDir, { recursive: true });
 
 // === Type-specific output files ===
@@ -667,28 +699,14 @@ function parseNamedAddressList(value, role) {
 }
 
 function splitApplicantsWithOrder(rawApplicants) {
-  const items = splitPipeListPreserveOrder(rawApplicants);
-
-  return items.map((entry, index) => {
-    const separatorIndex = entry.indexOf(":");
-    if (separatorIndex < 0) {
-      return {
-        order: index + 1,
-        raw: entry,
-        applicant_name: entry,
-        applicant_address: "",
-      };
-    }
-
-    const name = entry.slice(0, separatorIndex).trim();
-    const address = entry.slice(separatorIndex + 1).trim();
-    return {
-      order: index + 1,
-      raw: entry,
-      applicant_name: stripViPrefix(name),
-      applicant_address: stripViPrefix(address),
-    };
-  });
+  return parseApplicantHistory(rawApplicants).entries.map((entry, index) => ({
+    order: index + 1,
+    raw: entry.raw,
+    applicant_name: stripViPrefix(entry.name),
+    applicant_address: stripViPrefix(entry.address),
+    applicant_last_recorded_date: entry.lastRecordedDate,
+    applicant_is_current: entry.isCurrent,
+  }));
 }
 
 function splitPeopleWithOrder(rawPeople) {
@@ -744,15 +762,9 @@ function parseDiaryOrdered(rawDiary) {
 
 function buildStructuredJsonRecord(type, id, outputData) {
   const labels = TYPE_FIELD_LABELS[type] || [];
-  const parts = String(outputData || "").replace(/\n+$/, "").split("\t");
-  if (parts.length < 2) {
-    return null;
-  }
-
-  const image = parts[0] || "";
-  const recordType = parts[1] || "";
-  const fieldValues = parts.slice(2, 2 + labels.length);
-  const diaryRaw = parts.slice(2 + labels.length).join("\t");
+  const columns = splitStructuredColumns(type, outputData, labels.length);
+  if (!columns) return null;
+  const { image, recordType, fieldValues, diaryRaw } = columns;
 
   const fields = {};
   const dates = [];
@@ -766,8 +778,8 @@ function buildStructuredJsonRecord(type, id, outputData) {
   const applicantRaw =
     fields["(71/73) Chủ đơn/Chủ bằng"] || fields["(730) Chủ đơn/Chủ bằng"]
   ;
-  const applicants = splitPipeListPreserveOrder(applicantRaw);
   const applicants_ordered = splitApplicantsWithOrder(applicantRaw);
+  const applicants = applicants_ordered.map((item) => item.raw);
 
   const grantNumberDate = splitNumberAndDate(fields["(10) Số bằng và ngày cấp"] || fields["(100) Số bằng và ngày cấp"]);
   const applicationNumberDate = splitNumberAndDate(fields["(20) Số đơn và Ngày nộp đơn"] || fields["(200) Số đơn và Ngày nộp đơn"]);
@@ -816,7 +828,7 @@ function buildStructuredJsonRecord(type, id, outputData) {
   return {
     id,
     type,
-    record_type: stripViPrefix(recordType),
+    record_type: stripViPrefix(recordType || fields["Loáº¡i Ä‘Æ¡n"] || ""),
     image,
     fields,
     split_fields: splitFields,
@@ -963,15 +975,15 @@ function extractHeadersFromDoc(doc) {
 const config = {
   BASE_URLS: {
     PATENTS:
-      "http://wipopublish.ipvietnam.gov.vn/wopublish-search/public/ajax/detail/patents?id=VN",
+      "https://wipopublish.ipvietnam.gov.vn/wopublish-search/public/ajax/detail/patents?id=VN",
     DESIGNS:
-      "http://wipopublish.ipvietnam.gov.vn/wopublish-search/public/ajax/detail/designs?id=VN",
+      "https://wipopublish.ipvietnam.gov.vn/wopublish-search/public/ajax/detail/designs?id=VN",
     TRADEMARKS:
-      "http://wipopublish.ipvietnam.gov.vn/wopublish-search/public/ajax/detail/trademarks?id=VN",
+      "https://wipopublish.ipvietnam.gov.vn/wopublish-search/public/ajax/detail/trademarks?id=VN",
   },
   DATA_TYPE: "TRADEMARK", // default fallback for extract logic
   path: {
-    data: "ID_WIPO.txt",
+    data: path.resolve(process.env.WIPO_INPUT_FILE || path.join(__dirname, "ID_WIPO.txt")),
     log: path.join(baseOutputDir, "log.txt"),
     failedIDs: "failed_ids.txt",
   },
@@ -994,7 +1006,8 @@ const config = {
 };
 
 // === Initialize output structure and check for existing data ===
-const outputFileStructure = loadAlreadyScrapedIDs();
+const forceRescrape = process.argv.includes("--force-rescrape");
+const outputFileStructure = forceRescrape ? outputFiles : loadAlreadyScrapedIDs();
 initializeJsonOutputs();
 
 // === Load IDs with deduplication and filter out already scraped ones ===
@@ -1007,14 +1020,16 @@ let allIDs = fs
 // Deduplicate input IDs first
 const uniqueInputIDs = [...new Set(allIDs)];
 const duplicatesRemoved = allIDs.length - uniqueInputIDs.length;
-const forceRescrape = process.argv.includes("--force-rescrape");
-
 // Keep the normal daily-cache behaviour unless the caller explicitly asks to
 // refresh these IDs. Removing only the current input IDs preserves the rest of
 // today's processed set and lets the existing duplicate guard work normally.
 if (forceRescrape) {
   uniqueInputIDs.forEach(id => scrapingState.alreadyScrapedIDs.delete(id));
   originalConsole.log(`   Force rescrape: \x1b[33m${uniqueInputIDs.length}\x1b[0m input ID(s)`);
+}
+
+function emitStructuredRecord(record) {
+  sendParentMessage({ type: "wipo-record", record });
 }
 
 // Filter out already scraped IDs
@@ -1410,25 +1425,31 @@ async function recurse_request(i, reattemptCount = 0) {
 
       // Fetch with abort signal and Node-safe browser-like headers
       const response = await fetch(url, getFetchOptions(controller.signal));
-      
-      clearTimeout(timeoutId);
-      
-      logJobDetails(i, response, IDs, startTime, reattemptCount);
-
-      // Get response text with additional timeout protection
-      const textController = new AbortController();
-      const textTimeoutId = setTimeout(() => {
-        textController.abort();
-      }, config.timeout.REQUEST_TIMEOUT);
-      
+      // Keep the request's abort signal active until the response body is read.
+      // A separate controller cannot interrupt response.text().
       const text = await response.text();
-      clearTimeout(textTimeoutId);
+      clearTimeout(timeoutId);
+
+      logJobDetails(i, response, IDs, startTime, reattemptCount);
       
-      // Check if we got usable data regardless of HTTP status
-      if (hasUsableData(text)) {
+      const responseInspection = inspectWipoResponse(text);
+      // Check if we got usable data regardless of HTTP status.
+      if (responseInspection.usable) {
         // Success! We got usable data even if server returned error status
+        invalidHttp200Attempts.delete(currentID);
         scrapingState.resetReattemptCount(currentID);
         extractDataThenContinue(i, text);
+      } else if (response.status === 200 && responseInspection.classification === "empty") {
+        const attempts = (invalidHttp200Attempts.get(currentID) || 0) + 1;
+        invalidHttp200Attempts.set(currentID, attempts);
+        if (attempts >= 2) {
+          markConfirmedNotFound(currentID, attempts);
+          setImmediate(() => recurse_request(i + config.THREAD_COUNT, 0));
+        } else {
+          const retryDelay = config.delay.RETRY_DELAY_BASE + (Math.random() * 1000);
+          await utils.delay(retryDelay);
+          setImmediate(() => recurse_request(i, attempts));
+        }
       } else {
         // No usable data found, treat as error
         await handleServerError(i, reattemptCount, currentID);
@@ -1458,52 +1479,6 @@ async function recurse_request(i, reattemptCount = 0) {
     
     await handleServerError(i, reattemptCount, currentID);
   }
-}
-
-// Enhanced data detection - check for actual usable content instead of just error strings
-function hasUsableData(text) {
-  if (!text || typeof text !== 'string' || text.trim().length < 100) {
-    return false;
-  }
-  
-  // Check for critical error patterns that indicate completely unusable responses
-  const criticalErrors = [
-    'HTTP ERROR 404',
-    'HTTP ERROR 502', 
-    'HTTP ERROR 503',
-    'Gateway Timeout',
-    'Service Temporarily Unavailable',
-    'Connection refused',
-    'ECONNREFUSED',
-    '<title>Error</title>',
-    '<h1>Internal Server Error</h1>'
-  ];
-  
-  // If we find critical errors, it's unusable
-  if (criticalErrors.some(error => text.includes(error))) {
-    return false;
-  }
-  
-  // Check for positive indicators of WIPO data structure
-  const wipoDataIndicators = [
-    '.product-form-details',
-    '.product-form-label', 
-    '#accordion-1a',
-    '#accordion-2a',
-    '#accordion-3a',
-    'Số đơn và Ngày nộp đơn',
-    'Chủ đơn/Chủ bằng',
-    'Tác giả',
-    'Đại diện SHCN',
-    'class="row"',
-    'col-md-'
-  ];
-  
-  // If we find WIPO structure indicators, we have usable data
-  const foundIndicators = wipoDataIndicators.filter(indicator => text.includes(indicator));
-  
-  // Require at least 3 indicators to be confident it's real WIPO data
-  return foundIndicators.length >= 3;
 }
 
 // Legacy function kept for compatibility but not used in main flow
@@ -1632,6 +1607,7 @@ function extractDataThenContinue(i, text, sourceDetails = null) {
       if (madridParsed) structured.madrid = madridParsed.metadata;
       jsonOutputStore[type].push(structured);
       jsonFlushCounters[type] += 1;
+      emitStructuredRecord(structured);
       if (process.argv.includes("--live-json") || jsonFlushCounters[type] % 200 === 0) {
         flushJsonOutput(type);
       }
@@ -2454,7 +2430,7 @@ async function simpleRetryLoop() {
       }
     });
 
-    const missingIDs = originalIDs.filter(id => !processedIDs.has(id));
+    const missingIDs = originalIDs.filter(id => !processedIDs.has(id) && !confirmedNotFoundIDs.has(id));
     
     if (missingIDs.length === 0) {
       console.log(`🎉 All IDs processed successfully!`);
@@ -2563,6 +2539,18 @@ async function main() {
     
     // Step 2: Apply preset to config
     applyPresetToConfig(selectedPreset);
+    const retryCount = parseRetryCountFromArgs();
+    if (retryCount !== null) {
+      config.RETRY_LIMIT = retryCount;
+      config.MAX_REATTEMPTS = retryCount;
+    }
+    const requestedLanInterval = Number.parseInt(process.env.WIPO_BETWEEN_REQUEST_MS || "", 10);
+    if (Number.isFinite(requestedLanInterval) && requestedLanInterval >= 0) {
+      config.delay.BETWEEN_REQUEST = requestedLanInterval;
+    }
+    if (process.env.WIPO_LAN_FAIL_FAST === "1") {
+      config.timeout.REQUEST_TIMEOUT = Math.min(config.timeout.REQUEST_TIMEOUT, 15000);
+    }
     
     // Display applied configuration
     console.log("\x1b[1m\x1b[36m=== Applied Configuration ===\x1b[0m");
@@ -2598,7 +2586,7 @@ async function main() {
     await start();
     
     // Simple retry loop instead of complex post-processing
-    await simpleRetryLoop();
+    if (process.env.WIPO_SKIP_POST_RETRY !== "1") await simpleRetryLoop();
     
     // Generate final comprehensive report
     generateFinalReport();
