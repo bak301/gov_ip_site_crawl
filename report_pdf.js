@@ -28,7 +28,7 @@ async function getBrowser() {
 }
 
 async function renderReportPdf(html) {
-  if (typeof html !== 'string' || !html.includes('printing-report') || Buffer.byteLength(html, 'utf8') > 8_000_000) {
+  if (typeof html !== 'string' || !/\bprinting-(?:report|hague-report)\b/.test(html) || Buffer.byteLength(html, 'utf8') > 8_000_000) {
     throw new Error('Invalid or oversized WipoPublish report.');
   }
   await acquire();

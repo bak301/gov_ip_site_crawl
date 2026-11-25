@@ -8,7 +8,15 @@ The right pane shows the fully parsed record. Fields changed since the preceding
 
 ### LAN Hub
 
-The Unified LAN Hosting Hub exposes this tracker at `/wipo-application-tracker/`. Run `npm run lan` only for standalone development; normally the Hosting Hub starts and monitors it. All LAN clients share the host's SQLite history. Scrape requests are serialized because the underlying scraper uses one shared input file, and overlapping requests for the same application are coalesced so one update serves every waiting user.
+The Unified LAN Hosting Hub exposes this tracker at `/wipo-application-tracker/`. Run `npm run lan` only for standalone development; normally the Hosting Hub starts and monitors it. All LAN clients share the host's SQLite history. Each scrape uses a private input/output run directory; overlapping requests for the same application are coalesced so one update serves every waiting user.
+
+The shared queue defaults to 25 active scrape slots: 20 are available for the first active request from distinct browser clients, and five are shared burst slots for additional requests. A browser may have up to five active requests, dispatched at least one second apart. This lets 15 occasional users retain a slot while five busy users continue making progress; it does not guarantee five simultaneous requests to each busy user. The queue has no fixed user-count cap, and user identity is a browser-client ID rather than an authenticated person. Host operators can adjust `WIPO_TRACKER_MAX_CONCURRENT_REQUESTS`, `WIPO_TRACKER_FIRST_SLOT_RESERVE`, `WIPO_TRACKER_PER_USER_CONCURRENT`, and `WIPO_TRACKER_PER_USER_INTERVAL_MS`; by default the first-slot reserve is 80% of the total capacity.
+
+### Reuse the tracker source pane
+
+Open `/wipo-application-tracker/?embed=source` in an iframe to use the tracker's actual left pane in another SoftIP GUI. Under the LAN Hub, use `/softip/wipo-application-tracker/?embed=source`. The embedded view keeps the tracker's saved lists, case rows, Application/Registration/Request inputs, parsing, and lookup behavior. It shows the connection header and hides the right detail pane and standalone toolbar.
+
+The embedded page sends `{ type: 'softip-wipo-source-state', applicationNos, requestNos }` to its parent whenever the active list changes. The parent can request the current list with `{ type: 'softip-wipo-source-request' }`. Verify the message's `source` and `origin` before using it. The PDF extractor uses this contract to queue tracker applications and request PDFs for extraction.
 
 An improved web scraper for extracting intellectual property data (Patents, Trademarks, and Designs) from the Vietnamese WIPO website.
 

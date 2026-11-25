@@ -6,7 +6,30 @@ const path = require('node:path');
 const { createCaseRefResolver, parseCaseRefs } = require('../case_ref_resolver');
 
 test('IP/PR input is normalized and deduplicated', () => {
-  assert.deepEqual(parseCaseRefs('IP/PR17258/CDD, ip-pr17258/cdd\nIP/PR18642 IP\\PR18642'), ['IP/PR17258/CDD', 'IP/PR18642']);
+  assert.deepEqual(parseCaseRefs('IP/PR17258/CDD, ip-pr17258/cdd\nIP/PR18642 IP\\PR18642 IP-TR25170 ip\\dr1555/h'), ['IP/PR17258/CDD', 'IP/PR18642', 'IP/TR25170', 'IP/DR1555/H']);
+});
+
+test('trademark and design case tables resolve in both directions', async () => {
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'wipo-case-refs-'));
+  const statusJsonPath = path.join(folder, 'status.json');
+  const trademarkPath = path.join(folder, 'trademarks.jsonl');
+  const designPath = path.join(folder, 'designs.jsonl');
+  try {
+    fs.writeFileSync(statusJsonPath, JSON.stringify({ rows: [] }));
+    fs.writeFileSync(trademarkPath, `${JSON.stringify({ case_ref: 'IP/TR25170', dictionary_app_no: '4-2026-09638' })}\n`);
+    fs.writeFileSync(designPath, `${JSON.stringify({ case_ref: 'IP/DR1555/H', app_no: '3-2025-01533' })}\n`);
+    const resolver = createCaseRefResolver({ statusJsonPath, caseRecordPaths: [trademarkPath, designPath] });
+    assert.deepEqual((await resolver.resolve(['IP/TR25170', 'IP/DR1555'])).matches, [
+      { caseRef: 'IP/TR25170', applicationNos: ['4-2026-09638'] },
+      { caseRef: 'IP/DR1555', applicationNos: ['3-2025-01533'] },
+    ]);
+    assert.deepEqual((await resolver.lookupApplications(['4-2026-09638', '3-2025-01533'])).matches, [
+      { applicationNo: '4-2026-09638', caseRefs: ['IP/TR25170'] },
+      { applicationNo: '3-2025-01533', caseRefs: ['IP/DR1555/H'] },
+    ]);
+  } finally {
+    fs.rmSync(folder, { recursive: true, force: true });
+  }
 });
 
 test('shared Export-PR status resolves exact and base refs to all linked applications', async () => {

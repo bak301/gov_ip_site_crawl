@@ -5,15 +5,20 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { listPatentPublicationJsonFiles, normalizeApplicationNo } = require('../23_Patent Case Check/publication_data');
 const { lookupDocuments } = require('../3_Input/Pub/Publication extraction/publication_gui/publication_pdf_database');
+const { usesSourcePreview } = require('./publication_pdf_bytes');
 
-const PUBLICATION_ROOT = path.resolve(__dirname, '..', '3_Input', 'Pub', 'Output_Publication');
-const PUBLICATION_DATABASE = path.join(PUBLICATION_ROOT, 'GUI_Cache', 'publication_cache.sqlite');
-const PUBLICATION_PDF_DATABASE = path.join(PUBLICATION_ROOT, 'GUI_Cache', 'publication_pdf_repository.sqlite');
-const PUBLICATION_PDF_REPOSITORY = path.join(PUBLICATION_ROOT, 'GUI_Cache', 'Publication_PDF_Repository');
+const publicationPaths = require('../general_SoftIP_Scripts/publication_paths');
+const PUBLICATION_ROOT = publicationPaths.output;
+const PUBLICATION_DATABASE = publicationPaths.database;
+const PUBLICATION_PDF_DATABASE = publicationPaths.pdfDatabase;
+const WIPO_LOOKUP_DATABASE = path.resolve(process.env.WIPO_SCRAPER_DATABASE || path.join(__dirname, '..', 'Wipopublish_Scrape_ApplicationDetails', 'WIPO_Application_History.sqlite'));
+const PUBLICATION_PDF_REPOSITORY = publicationPaths.splitPdfs;
 const LOOKUP_HELPER = path.join(__dirname, 'publication_pdf_lookup.py');
-const APPLICATION_PDF_ROOT = path.resolve(process.env.SOFTIP_APPLICATION_PDF_DIR || path.join(PUBLICATION_ROOT, 'GUI_Cache', 'Application_PDFs'));
+const INTERNATIONAL_INDEX_SCRIPT = path.join(__dirname, '..', '3_Input', 'Pub', 'Publication extraction', 'international_publication_index.py');
+const APPLICATION_PDF_ROOT = path.resolve(process.env.SOFTIP_APPLICATION_PDF_DIR || publicationPaths.applicationPdfs);
 const DEFAULT_PDF_ROOTS = [
   process.env.SOFTIP_PUBLICATION_PDF_DIR,
+  publicationPaths.sources,
   'D:\\WORK_HIEP\\OneDrive\\14_Vision\\7_Publication collection\\All Publication',
   'D:\\WORK_HIEP\\6_Vision\\1_Patent\\4_Publication (Pat)\\1_Monthly Pub',
 ].filter(Boolean);
@@ -22,6 +27,13 @@ const resolutionJobs = new Map();
 const documentListCache = new Map();
 let pdfInventory;
 const historicalPreparationJobs = new Map();
+
+function repositorySignature() {
+  return [PUBLICATION_PDF_DATABASE, `${PUBLICATION_PDF_DATABASE}-wal`].map(file => {
+    try { const stat = fs.statSync(file); return `${stat.size}:${stat.mtimeMs}`; }
+    catch { return '-'; }
+  }).join('|');
+}
 
 function firstValue(record, aliases) {
   for (const key of aliases) {
@@ -107,6 +119,85 @@ function queryPublicationDatabase(applicationNo, registrationNo = '') {
   });
 }
 
+function lookupPublicationRegistrations(registrationNumbers = [], registrationType = 'patent', applicationNos = []) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(String(process.env.WIPO_PYTHON || 'python'), [LOOKUP_HELPER, '--lookup-registrations', PUBLICATION_DATABASE, WIPO_LOOKUP_DATABASE, PUBLICATION_PDF_DATABASE], {
+      cwd: __dirname, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk.toString('utf8'); });
+    child.stderr.on('data', (chunk) => { stderr += chunk.toString('utf8'); });
+    child.once('error', reject);
+    child.once('close', (code) => {
+      if (code !== 0) return reject(new Error(stderr.trim() || `Registration lookup exited with code ${code}.`));
+      try { resolve(JSON.parse(stdout || '{"ok":true,"matches":[],"missing":[]}')); }
+      catch { reject(new Error('Registration lookup returned invalid JSON.')); }
+    });
+    child.stdin.end(JSON.stringify({ registrationNumbers, registrationType, applicationNos }));
+  });
+}
+
+function lookupInternationalPublications(identifier) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(String(process.env.WIPO_PYTHON || 'python'),
+      [LOOKUP_HELPER, '--lookup-international-publications', PUBLICATION_DATABASE, String(identifier || '')], {
+        cwd: __dirname, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+      });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', chunk => { stdout += chunk.toString('utf8'); });
+    child.stderr.on('data', chunk => { stderr += chunk.toString('utf8'); });
+    child.once('error', reject);
+    child.once('close', code => {
+      if (code !== 0) return reject(new Error(stderr.trim() || `International publication lookup exited with code ${code}.`));
+      try { resolve(JSON.parse(stdout || '{}')); }
+      catch { reject(new Error('International publication lookup returned invalid JSON.')); }
+    });
+  });
+}
+
+function prepareMadridPublicationDocuments(registrationNo) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(String(process.env.WIPO_PYTHON || 'python'),
+      [LOOKUP_HELPER, '--prepare-madrid-documents', PUBLICATION_DATABASE, PUBLICATION_PDF_REPOSITORY, registrationNo], {
+        cwd: __dirname, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+      });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', chunk => { stdout += chunk.toString('utf8'); });
+    child.stderr.on('data', chunk => { stderr += chunk.toString('utf8'); });
+    child.once('error', reject);
+    child.once('close', code => {
+      if (code !== 0) return reject(new Error(stderr.trim() || `Madrid publication preparation exited with code ${code}.`));
+      try {
+        const result = JSON.parse(stdout || '{}');
+        if (!result.ok) return reject(new Error(result.error || 'Madrid publication lookup failed.'));
+        resolve(result.documents || []);
+      } catch (error) { reject(error); }
+    });
+  });
+}
+
+function syncHaguePublicationIndex(number) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(String(process.env.WIPO_PYTHON || 'python'),
+      [INTERNATIONAL_INDEX_SCRIPT, '--hague-number', String(number || '')], {
+        cwd: __dirname, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+      });
+    let output = '';
+    let errorText = '';
+    child.stdout.on('data', chunk => { output += chunk.toString('utf8'); });
+    child.stderr.on('data', chunk => { errorText += chunk.toString('utf8'); });
+    child.once('error', reject);
+    child.once('close', code => code === 0 ? resolve(output.trim())
+      : reject(new Error(errorText.trim() || `Hague publication index exited with code ${code}.`)));
+  });
+}
+
 function upsertPublicationDocument(document) {
   return new Promise((resolve, reject) => {
     const child = spawn(String(process.env.WIPO_PYTHON || 'python'), [LOOKUP_HELPER, '--upsert-document', PUBLICATION_PDF_DATABASE], {
@@ -135,40 +226,31 @@ async function prepareHistoricalPublicationDocument(applicationNo) {
   if (!pages.length) throw new Error(`No source pages were recorded for ${canonicalApplicationNo(applicationNo)}.`);
 
   const { PDFDocument } = require('pdf-lib');
-  const sourceBytes = await fs.promises.readFile(sourcePath);
-  const sourcePdf = await PDFDocument.load(sourceBytes, { ignoreEncryption: true });
+  const sourcePdf = await PDFDocument.load(await fs.promises.readFile(sourcePath), { ignoreEncryption: true });
   const validPages = pages.filter(page => page >= 1 && page <= sourcePdf.getPageCount());
   if (validPages.length !== pages.length) throw new Error(`Page designation ${pages.join(', ')} exceeds the ${sourcePdf.getPageCount()}-page source PDF.`);
   const identity = classifyPdf(sourcePath) || { cb: 0, volume: 'A', book: '1' };
-  const outputFolder = path.join(PUBLICATION_PDF_REPOSITORY, `CB_${identity.cb || 'Unknown'}_${identity.volume || 'A'}${identity.book || ''}`, 'Publication_A');
   const canonical = canonicalApplicationNo(applicationNo);
-  const pdfPath = path.join(outputFolder, `${canonical}.pdf`);
-  await fs.promises.mkdir(outputFolder, { recursive: true });
-  const output = await PDFDocument.create();
-  const copiedPages = await output.copyPages(sourcePdf, validPages.map(page => page - 1));
-  copiedPages.forEach(page => output.addPage(page));
-  const temporaryPath = `${pdfPath}.${process.pid}.tmp`;
-  await fs.promises.writeFile(temporaryPath, await output.save());
-  await fs.promises.rm(pdfPath, { force: true });
-  await fs.promises.rename(temporaryPath, pdfPath);
   const stat = await fs.promises.stat(sourcePath);
   await upsertPublicationDocument({
     category: 'publication_a', lookupKey: canonical, modeId: '1', applicationNumber: canonical,
     registrationNumber: '', requestNumber: '', publicationNumber: firstValue(historical.record, ['Publication_Number', 'Publication Number']),
     sourcePath, sourceFile: path.basename(sourcePath), cbNumber: identity.cb || 0, volume: identity.volume || 'A', book: identity.book || '1',
-    sourcePages: validPages.join(', '), sourceSize: stat.size, sourceMtimeMs: stat.mtimeMs, pdfPath,
+    sourcePages: validPages.join(', '), sourceSize: stat.size, sourceMtimeMs: stat.mtimeMs, pdfPath: '',
     pageCount: validPages.length, record: historical.record, generatedAt: new Date().toISOString(),
   });
   const metadata = await queryPublicationDatabase(canonical);
-  return (metadata?.documents || []).filter(item => item?.pdfPath && fs.existsSync(item.pdfPath));
+  return (metadata?.documents || []).filter(item => usesSourcePreview(item) || (item?.pdfPath && fs.existsSync(item.pdfPath)));
 }
 
 async function listPublicationPdfs(applicationNo, registrationNo = '') {
+  const madrid = String(applicationNo || '').trim().toUpperCase().match(/^5-(\d{5,9}[A-Z]?)$/);
+  if (madrid) return prepareMadridPublicationDocuments(madrid[1]);
   const cacheKey = `${canonicalApplicationNo(applicationNo)}|${String(registrationNo || '').trim()}`;
   let signature = '';
   try {
-    const stat = fs.statSync(PUBLICATION_PDF_DATABASE);
-    signature = `${stat.size}:${stat.mtimeMs}`;
+    fs.statSync(PUBLICATION_PDF_DATABASE);
+    signature = repositorySignature();
     const cachedList = documentListCache.get(cacheKey);
     if (cachedList?.signature === signature) return cachedList.documents;
   } catch { /* The legacy application-PDF cache is still a valid fallback. */ }
@@ -200,11 +282,12 @@ async function listPublicationPdfs(applicationNo, registrationNo = '') {
     pages: item.source_pages,
     sourcePages: parsePublicationPages(item.source_pages),
     pdfPath: item.pdf_path,
-    page: 1,
+    page: parsePublicationPages(item.source_pages)[0] || 1,
     pageCount: item.page_count,
     generatedAt: item.generated_at,
     source: 'Publication Workbench PDF repository',
-  })).filter(item => item.pdfPath && fs.existsSync(item.pdfPath));
+    repositoryDatabase: PUBLICATION_PDF_DATABASE,
+  })).filter(item => usesSourcePreview(item) || (item.pdfPath && fs.existsSync(item.pdfPath)));
   let directDocuments = repositoryDocuments(directRows);
   let metadata = null;
 
@@ -214,10 +297,11 @@ async function listPublicationPdfs(applicationNo, registrationNo = '') {
   if (!directDocuments.length) {
     metadata = await queryPublicationDatabase(applicationNo, registrationNo).catch(() => null);
     directDocuments = (metadata?.documents || [])
-      .filter(item => item?.pdfPath && fs.existsSync(item.pdfPath));
+      .map(item => ({ ...item, sourcePages: item.sourcePages || parsePublicationPages(item.pages), page: item.sourcePages?.[0] || parsePublicationPages(item.pages)[0] || 1 }))
+      .filter(item => usesSourcePreview(item) || (item?.pdfPath && fs.existsSync(item.pdfPath)));
   }
 
-  if (!directDocuments.length) {
+  if (!directDocuments.length && canonicalApplicationNo(applicationNo)) {
     const canonical = canonicalApplicationNo(applicationNo);
     let preparation = historicalPreparationJobs.get(canonical);
     if (!preparation) {
@@ -240,8 +324,7 @@ async function listPublicationPdfs(applicationNo, registrationNo = '') {
     // Historical preparation updates the repository, so cache against its
     // post-write signature rather than the signature observed at entry.
     try {
-      const finalStat = fs.statSync(PUBLICATION_PDF_DATABASE);
-      signature = `${finalStat.size}:${finalStat.mtimeMs}`;
+      signature = repositorySignature();
     } catch { /* Returning the prepared document does not require caching. */ }
     if (signature) documentListCache.set(cacheKey, { signature, documents: sorted });
     return sorted;
@@ -311,15 +394,17 @@ function resolvePdfPath(metadata) {
   const files = listPdfs();
   const sourceName = path.basename(metadata.sourceFile || '');
   if (sourceName) {
-    const exact = files.find((file) => path.basename(file).localeCompare(sourceName, undefined, { sensitivity: 'accent' }) === 0);
-    if (exact) return exact;
+    const exact = files.filter((file) => path.basename(file).localeCompare(sourceName, undefined, { sensitivity: 'accent' }) === 0);
+    if (exact.length) return exact.length === 1 ? exact[0] : '';
+    if (/\.pdf$/i.test(sourceName)) return '';
   }
   const identity = bulletinIdentity(metadata.record, metadata.sourceFile, metadata.sourceJson);
   if (!identity) return '';
-  return files.find((file) => {
+  const candidates = files.filter((file) => {
     const current = classifyPdf(file);
     return current && current.cb === identity.cb && current.volume === identity.volume && current.book === identity.book;
-  }) || '';
+  });
+  return candidates.length === 1 ? candidates[0] : '';
 }
 
 async function buildPublicationPdf(applicationNo) {
@@ -354,6 +439,9 @@ module.exports = {
   resolvePublicationPdf,
   listPublicationPdfs,
   checkPublicationA,
+  lookupPublicationRegistrations,
+  lookupInternationalPublications,
+  syncHaguePublicationIndex,
   parsePublicationPages,
   applicationPdfPaths,
   readCachedApplicationPdf,

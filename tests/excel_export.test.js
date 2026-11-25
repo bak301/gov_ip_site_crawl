@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const ExcelJS = require('exceljs');
-const { createOriginalOutputWorkbook } = require('../wipo_excel_export');
+const { createOriginalOutputWorkbook, createConfiguredOutputWorkbook, EXCEL_COLUMN_CATALOG } = require('../wipo_excel_export');
 
 test('Excel export retains the original Execution Hub output layout and transformations', async () => {
   const detail = {
@@ -81,4 +81,63 @@ test('trademark export converts lf markers and embeds the logo image', async () 
   assert.equal(sheet.getCell('B2').value, '');
   assert.equal(sheet.getImages().length, 1);
   assert.ok(sheet.getRow(2).height >= 62);
+});
+
+test('configured Excel splits numbers and dates and separates current from previous applicants', async () => {
+  const current = { id: '4-2025-12495', type: 'TRADEMARKS', image: '',
+    fields: { 'Trạng thái': 'Cấp bằng', '(100) Số bằng và ngày cấp': '4-0623519-000 03.07.2026',
+      '(200) Số đơn và Ngày nộp đơn': 'VN -4-2025-12495 27.03.2025' },
+    applicants_ordered: [{ applicant_name: 'New Owner', applicant_address: 'New address' }], diary: [] };
+  const old = { ...current, applicants_ordered: [{ applicant_name: 'Old Owner', applicant_address: 'Old address' }] };
+  const detail = { applicationNo: '4-2025-12495', latest: { id: 2, data: current },
+    snapshots: [{ id: 2, data: current }, { id: 1, data: old }] };
+  const columns = ['applicationNo', 'filingDate', 'registrationNo', 'grantDate', 'currentApplicantName',
+    'currentApplicantAddress', 'previousApplicantName', 'previousApplicantAddress', 'field:Trạng thái'];
+  const workbook = await createConfiguredOutputWorkbook([detail], { columns, currentApplicantsOnly: false });
+  const sheet = workbook.getWorksheet('Output');
+  assert.deepEqual(sheet.getRow(2).values.slice(1), ['4-2025-12495', '27/03/2025', '4-0623519-000', '03/07/2026',
+    'New Owner', 'New address', 'Old Owner', 'Old address', 'Cấp bằng']);
+  const currentOnly = await createConfiguredOutputWorkbook([detail], { columns, currentApplicantsOnly: true });
+  assert.equal(currentOnly.getWorksheet('Output').getRow(1).values.includes('Previous applicant name'), false);
+  assert.equal(currentOnly.getWorksheet('Output').getRow(2).values.includes('Old Owner'), false);
+  assert.ok(EXCEL_COLUMN_CATALOG.some((column) => column.key === 'field:(511) Nhóm sản phẩm/dịch vụ'));
+});
+
+test('configured Excel embeds trademark images in the selected image column', async () => {
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+  const detail = { applicationNo: '4-2025-31926', latest: { data: { id: '4-2025-31926', type: 'TRADEMARKS',
+    image: `data:image/png;base64,${png}`, fields: {} } } };
+  const workbook = await createConfiguredOutputWorkbook([detail], { columns: ['applicationNo', 'image'], currentApplicantsOnly: true });
+  const sheet = workbook.getWorksheet('Output');
+  assert.equal(sheet.getImages().length, 1);
+  assert.equal(sheet.getImages()[0].range.tl.nativeCol, 1);
+});
+
+test('configured Excel exports the dated former owner separately from the undated current owner', async () => {
+  const detail = { applicationNo: '4-2010-11279', latest: { data: { id: '4-2010-11279', type: 'TRADEMARKS', fields: {
+    '(730) Chủ đơn/Chủ bằng': 'Ca Da(VN) : Đắk Lắk 27/03/2018 Nutifood : Hồ Chí Minh',
+  }, applicants_ordered: [{ applicant_name: 'Ca Da(VN)', applicant_address: 'Đắk Lắk 27/03/2018 Nutifood : Hồ Chí Minh' }] } } };
+  const columns = ['applicationNo', 'currentApplicantName', 'currentApplicantAddress', 'previousApplicantName',
+    'previousApplicantAddress', 'previousApplicantLastRecorded'];
+  const workbook = await createConfiguredOutputWorkbook([detail], { columns, currentApplicantsOnly: false });
+  assert.deepEqual(workbook.getWorksheet('Output').getRow(2).values.slice(1),
+    ['4-2010-11279', 'Nutifood', 'Hồ Chí Minh', 'Ca Da(VN)', 'Đắk Lắk', '27/03/2018']);
+});
+
+test('configured Excel separates a dated earlier owner after the current owner', async () => {
+  const raw = 'Công ty cổ phần thực phẩm dinh dưỡng Nutifood : 281-283 Hoàng Diệu, phường 6, quận 4, thành phố Hồ Chí Minh Công ty cổ phần thực phẩm dinh dưỡng Đồng Tâm(VN) : 208 Nguyễn Thái Bình, phường 12, quận Tân Bình, thành phố Hồ Chí Minh 03/11/2011';
+  const detail = { applicationNo: '4-2007-24758', latest: { data: { id: '4-2007-24758', type: 'TRADEMARKS',
+    fields: { '(730) Chủ đơn/Chủ bằng': raw },
+    applicants_ordered: [{ applicant_name: 'Công ty cổ phần thực phẩm dinh dưỡng Nutifood', applicant_address: raw }],
+  } } };
+  const columns = ['currentApplicantName', 'currentApplicantAddress', 'previousApplicantName',
+    'previousApplicantAddress', 'previousApplicantLastRecorded'];
+  const workbook = await createConfiguredOutputWorkbook([detail], { columns, currentApplicantsOnly: false });
+  assert.deepEqual(workbook.getWorksheet('Output').getRow(2).values.slice(1), [
+    'Công ty cổ phần thực phẩm dinh dưỡng Nutifood',
+    '281-283 Hoàng Diệu, phường 6, quận 4, thành phố Hồ Chí Minh',
+    'Công ty cổ phần thực phẩm dinh dưỡng Đồng Tâm(VN)',
+    '208 Nguyễn Thái Bình, phường 12, quận Tân Bình, thành phố Hồ Chí Minh',
+    '03/11/2011',
+  ]);
 });

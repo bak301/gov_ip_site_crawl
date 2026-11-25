@@ -1,11 +1,19 @@
-const APPLICATION_PATTERN = /\b[1-5]-\d{4}-\d{4,}\b/g;
-const COMPACT_APPLICATION_PATTERN = /\b(?:VN)?([1-5])(\d{4})(\d{4,})\b/gi;
+const APPLICATION_PATTERN = /(?:^|[^A-Z0-9])([1-5]-\d{4}-\d{4,})(?![A-Z0-9])/gi;
+const COMPACT_APPLICATION_PATTERN = /(?:^|[^A-Z0-9])(?:VN)?([1-5])(\d{4})(\d{4,})(?![A-Z0-9])/gi;
+const MADRID_PATTERN = /(?:^|[^A-Z0-9])(5-\d{5,9}[A-Z]?)(?![A-Z0-9])/gi;
+const REGISTRATION_TYPES = Object.freeze({
+  patent: { prefixes: ["1", "2"], defaultPrefix: "1" },
+  design: { prefixes: ["3"], defaultPrefix: "3" },
+  trademark: { prefixes: ["4"], defaultPrefix: "4" },
+});
 
 function normalizeApplicationNo(value) {
-  const text = String(value || "").trim().toUpperCase().replace(/^VN\s*/i, "");
-  const match = text.match(/[1-5]-\d{4}-\d{4,}/);
-  if (match) return match[0];
-  const compact = text.match(/(?:^|\W)(?:VN)?([1-5])(\d{4})(\d{4,})(?:\W|$)/i);
+  const text = String(value || "").trim().toUpperCase();
+  const match = text.match(/(?:^|[^A-Z0-9])([1-5]-\d{4}-\d{4,})(?![A-Z0-9])/i);
+  if (match) return match[1];
+  const madrid = text.match(/(?:^|[^A-Z0-9])(5-\d{5,9}[A-Z]?)(?![A-Z0-9])/i);
+  if (madrid) return madrid[1];
+  const compact = text.match(/(?:^|[^A-Z0-9])(?:VN)?([1-5])(\d{4})(\d{4,})(?![A-Z0-9])/i);
   return compact ? `${compact[1]}-${compact[2]}-${compact[3]}` : "";
 }
 
@@ -16,7 +24,8 @@ function parseApplicationNumbers(input) {
 
   for (const value of values) {
     const text = String(value || "").trim();
-    const matches = [...(text.match(APPLICATION_PATTERN) || [])];
+    const matches = [...text.matchAll(APPLICATION_PATTERN)].map((match) => match[1]);
+    for (const match of text.matchAll(MADRID_PATTERN)) matches.push(match[1]);
     for (const match of text.matchAll(COMPACT_APPLICATION_PATTERN)) matches.push(`${match[1]}-${match[2]}-${match[3]}`);
     if (!matches.length && text) matches.push(text);
     for (const candidate of matches) {
@@ -27,6 +36,45 @@ function parseApplicationNumbers(input) {
     }
   }
   return found;
+}
+
+function registrationTypeForPrefix(prefix) {
+  if (prefix === "1" || prefix === "2") return "patent";
+  if (prefix === "3") return "design";
+  if (prefix === "4") return "trademark";
+  return "";
+}
+
+function normalizeRegistrationNo(value, selectedType = "patent") {
+  const text = String(value || "").trim().toUpperCase().replace(/\s+B\s*$/, "");
+  if (!text) return null;
+  // A WIPO application number can otherwise be mistaken for a registration
+  // number by treating its year as the registration's significant digits.
+  if (normalizeApplicationNo(text)) return null;
+  const explicit = text.match(/(?:^|[^A-Z0-9])([1-4])\s*[-/]\s*0*(\d{1,7})(?:\s*[-/]\s*(\d{1,3}))?(?!\d)/);
+  const digitsOnly = !explicit && text.match(/^0*(\d{1,7})(?:\s*[-/]\s*(\d{1,3}))?$/);
+  if (!explicit && !digitsOnly) return null;
+  const requestedType = Object.hasOwn(REGISTRATION_TYPES, selectedType) ? selectedType : "patent";
+  const prefix = explicit ? explicit[1] : REGISTRATION_TYPES[requestedType].defaultPrefix;
+  const type = registrationTypeForPrefix(prefix);
+  const numberValue = String(explicit ? explicit[2] : digitsOnly[1]).replace(/^0+(?=\d)/, "");
+  if (!numberValue || numberValue.length > 7) return null;
+  const number = numberValue.padStart(7, "0");
+  const suffix = String((explicit ? explicit[3] : digitsOnly[2]) || "000").padStart(3, "0");
+  return { type, prefix, number, suffix, lookupKey: numberValue, formatted: `${prefix}-${number}-${suffix}` };
+}
+
+function parseRegistrationNumbers(input, selectedType = "patent") {
+  const values = Array.isArray(input) ? input : String(input || "").split(/[\r\n,;\t]+/);
+  const result = [];
+  const seen = new Set();
+  for (const value of values) {
+    const parsed = normalizeRegistrationNo(value, selectedType);
+    if (!parsed || seen.has(parsed.formatted)) continue;
+    seen.add(parsed.formatted);
+    result.push(parsed);
+  }
+  return result;
 }
 
 function getRecordApplicationNo(record) {
@@ -172,6 +220,10 @@ module.exports = {
   COMPACT_APPLICATION_PATTERN,
   normalizeApplicationNo,
   parseApplicationNumbers,
+  REGISTRATION_TYPES,
+  registrationTypeForPrefix,
+  normalizeRegistrationNo,
+  parseRegistrationNumbers,
   getRecordApplicationNo,
   flattenRecord,
   diffRecords,

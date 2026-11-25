@@ -2,6 +2,7 @@
 
 const ExcelJS = require('exceljs');
 const { Agent } = require('undici');
+const { parseApplicantHistory } = require('../electron-app/wipo_applicant_history');
 
 const wipoImageDispatcher = new Agent({ connect: { rejectUnauthorized: false } });
 
@@ -48,6 +49,27 @@ const TRADEMARK_FIELD_LABELS = [
   '(740) Đại diện SHCN', '(571) Nhãn hiệu', '(566) Nhãn hiệu dịch thuật',
   '(550) Kiểu của mẫu nhãn(hình/chữ/kết hợp)', '(526) Yếu tố loại trừ',
 ];
+
+const COMBINED_EXPORT_FIELDS = new Set([
+  '(10) Số bằng và ngày cấp', '(100) Số bằng và ngày cấp',
+  '(20) Số đơn và Ngày nộp đơn', '(200) Số đơn và Ngày nộp đơn',
+  '(71/73) Chủ đơn/Chủ bằng', '(730) Chủ đơn/Chủ bằng',
+]);
+const EXCEL_BASE_COLUMNS = [
+  ['applicationNo', 'Application no.'], ['filingDate', 'Filing date (dd/mm/yyyy)'],
+  ['registrationNo', 'Registration no.'], ['grantDate', 'Grant date (dd/mm/yyyy)'],
+  ['image', 'Image'], ['currentApplicantName', 'Current applicant name'],
+  ['currentApplicantAddress', 'Current applicant address'],
+  ['previousApplicantName', 'Previous applicant name'],
+  ['previousApplicantAddress', 'Previous applicant address'],
+  ['previousApplicantLastRecorded', 'Previous applicant last recorded (dd/mm/yyyy)'],
+];
+const EXCEL_FIELD_COLUMNS = [...new Set([...PATENT_FIELD_LABELS, ...DESIGN_FIELD_LABELS, ...TRADEMARK_FIELD_LABELS, 'Tiến trình'])]
+  .filter((label) => !COMBINED_EXPORT_FIELDS.has(label))
+  .map((label) => [`field:${label}`, label]);
+const EXCEL_COLUMN_CATALOG = [...EXCEL_BASE_COLUMNS, ...EXCEL_FIELD_COLUMNS].map(([key, label]) => ({ key, label }));
+const EXCEL_COLUMN_KEYS = new Set(EXCEL_COLUMN_CATALOG.map((column) => column.key));
+const PREVIOUS_APPLICANT_KEYS = new Set(['previousApplicantName', 'previousApplicantAddress', 'previousApplicantLastRecorded']);
 
 function recordType(detail) {
   const data = detail?.latest?.data || {};
@@ -246,7 +268,8 @@ async function loadImageForExport(url, detail, fetchImpl = fetch) {
 }
 
 async function embedTrademarkImages(workbook, sheet, details, options = {}) {
-  const imageColumnIndex = 2;
+  const imageColumnIndex = options.imageColumnIndex === undefined ? 2 : options.imageColumnIndex;
+  if (imageColumnIndex < 1) return;
   sheet.getColumn(imageColumnIndex).width = 18;
   const entries = details || [];
   let cursor = 0;
@@ -260,7 +283,7 @@ async function embedTrademarkImages(workbook, sheet, details, options = {}) {
       if (!image?.buffer?.length) continue;
       const rowNumber = index + 2;
       const imageId = workbook.addImage({ buffer: image.buffer, extension: image.extension });
-      sheet.addImage(imageId, { tl: { col: 1.12, row: rowNumber - 0.92 }, ext: { width: 110, height: 78 }, editAs: 'oneCell' });
+      sheet.addImage(imageId, { tl: { col: imageColumnIndex - 0.88, row: rowNumber - 0.92 }, ext: { width: 110, height: 78 }, editAs: 'oneCell' });
       sheet.getRow(rowNumber).height = Math.max(Number(sheet.getRow(rowNumber).height || 0), 62);
       sheet.getCell(rowNumber, imageColumnIndex).value = '';
     }
@@ -271,6 +294,107 @@ async function embedTrademarkImages(workbook, sheet, details, options = {}) {
 function createReferenceOutputWorkbook(sourceHeaders, sourceRows) {
   const workbook = new ExcelJS.Workbook();
   addReferenceOutputSheet(workbook, 'Output', sourceHeaders, sourceRows);
+  return workbook;
+}
+
+function selectedExcelColumns(config = {}) {
+  const supplied = Array.isArray(config.columns) ? config.columns : EXCEL_COLUMN_CATALOG.map((column) => column.key);
+  const columns = [...new Set(supplied)].filter((key) => EXCEL_COLUMN_KEYS.has(key)
+    && (!config.currentApplicantsOnly || !PREVIOUS_APPLICANT_KEYS.has(key)));
+  if (!columns.length) throw new Error('Select at least one Excel column.');
+  return columns;
+}
+
+function parsedApplicantRows(data) {
+  const fields = normalizeTrademarkFieldsForExport(data);
+  const raw = String(fields['(71/73) Chủ đơn/Chủ bằng'] || fields['(730) Chủ đơn/Chủ bằng'] || '');
+  if (raw) return parseApplicantHistory(raw).entries;
+  const ordered = Array.isArray(data?.applicants_ordered) ? data.applicants_ordered : [];
+  if (ordered.length) return ordered.map((item) => ({
+    name: String(item.applicant_name || item.name || '').trim(),
+    address: String(item.applicant_address || item.address || '').trim(),
+    lastRecordedDate: item.applicant_last_recorded_date || '',
+    isCurrent: item.applicant_is_current !== false && !item.applicant_last_recorded_date,
+  })).filter((item) => item.name || item.address);
+  return [];
+}
+
+function applicantVersions(detail) {
+  const latestEntries = parsedApplicantRows(detail?.latest?.data);
+  const current = latestEntries.filter((item) => item.isCurrent);
+  const currentKeys = new Set(current.map((item) => `${item.name}\u0000${item.address}`));
+  const seen = new Set(currentKeys);
+  const previous = [];
+  function appendEarlier(item) {
+    const key = `${item.name}\u0000${item.address}`;
+    if (!seen.has(key)) { seen.add(key); previous.push(item); }
+  }
+  latestEntries.filter((item) => !item.isCurrent).forEach(appendEarlier);
+  for (const snapshot of detail?.snapshots || []) {
+    if (snapshot === detail.latest || snapshot.id === detail?.latest?.id) continue;
+    parsedApplicantRows(snapshot.data).forEach(appendEarlier);
+  }
+  return { current, previous };
+}
+
+function dateText(value) {
+  if (!value) return '';
+  if (typeof value === 'string') return normalizeDotDatesForExport(value);
+  return normalizeDotDatesForExport(value.date_text || value.date?.raw || value.raw || '');
+}
+
+function configuredCell(detail, key, applicants) {
+  const data = detail?.latest?.data || {};
+  const fields = recordType(detail) === 'TRADEMARKS' ? normalizeTrademarkFieldsForExport(data) : (data.fields || {});
+  const split = data.split_fields || {};
+  const grantRaw = fields['(10) Số bằng và ngày cấp'] || fields['(100) Số bằng và ngày cấp'] || '';
+  const appRaw = fields['(20) Số đơn và Ngày nộp đơn'] || fields['(200) Số đơn và Ngày nộp đơn'] || '';
+  if (key === 'applicationNo') return split.application_number_date?.application_no || data.id || detail?.applicationNo || '';
+  if (key === 'filingDate') return dateText(split.application_number_date?.date_text || split.application_number_date?.date) || dateText(appRaw.match(/(\d{2}[./]\d{2}[./]\d{4})\s*$/)?.[1]);
+  if (key === 'registrationNo') return split.grant_number_date?.number || normalizeDotDatesForExport(grantRaw).replace(/\s+\d{2}\/\d{2}\/\d{4}\s*$/, '');
+  if (key === 'grantDate') return dateText(split.grant_number_date?.date_text || split.grant_number_date?.date) || dateText(grantRaw.match(/(\d{2}[./]\d{2}[./]\d{4})\s*$/)?.[1]);
+  if (key === 'image') return '';
+  const applicantColumn = { currentApplicantName: ['current', 'name'], currentApplicantAddress: ['current', 'address'],
+    previousApplicantName: ['previous', 'name'], previousApplicantAddress: ['previous', 'address'],
+    previousApplicantLastRecorded: ['previous', 'lastRecordedDate'] }[key];
+  if (applicantColumn) return applicants[applicantColumn[0]].map((item) => item[applicantColumn[1]]).join('\n');
+  if (key === 'field:Tiến trình') return decodeCellMarkers(diarySourceValue(data.diary));
+  return normalizeDotDatesForExport(decodeCellMarkers(fields[key.slice(6)] || ''));
+}
+
+async function createConfiguredOutputWorkbook(details, config = {}, options = {}) {
+  const selected = selectedExcelColumns(config);
+  const workbook = new ExcelJS.Workbook();
+  const groups = new Map();
+  for (const detail of details || []) {
+    const type = recordType(detail);
+    if (!groups.has(type)) groups.set(type, []);
+    groups.get(type).push(detail);
+  }
+  const names = { PATENTS: 'Patents', DESIGNS: 'Designs', TRADEMARKS: 'Trademarks' };
+  for (const [type, items] of groups) {
+    const available = new Set(labelsForType(type).map((label) => `field:${label}`));
+    available.add('field:Tiến trình');
+    const keys = selected.filter((key) => !key.startsWith('field:') || available.has(key));
+    if (!keys.length) throw new Error(`No selected Excel columns apply to ${names[type]}.`);
+    const sheet = workbook.addWorksheet(groups.size === 1 ? 'Output' : names[type]);
+    sheet.addRow(keys.map((key) => EXCEL_COLUMN_CATALOG.find((column) => column.key === key)?.label || 'Procedural timeline'));
+    sheet.getRow(1).font = { bold: true };
+    for (const detail of items) {
+      const applicants = applicantVersions(detail);
+      const values = keys.map((key) => configuredCell(detail, key, applicants));
+      const row = sheet.addRow(values);
+      const lines = Math.max(1, ...values.map((value) => String(value).split('\n').length));
+      if (lines > 1) row.height = Math.min(409, Math.max(30, lines * 15));
+    }
+    keys.forEach((key, index) => {
+      if (key === 'image') return;
+      const column = sheet.getColumn(index + 1);
+      column.width = Math.min(60, Math.max(14, String(sheet.getCell(1, index + 1).value).length + 2));
+      column.alignment = { wrapText: true, vertical: 'top' };
+    });
+    if (type === 'TRADEMARKS' && keys.includes('image')) await embedTrademarkImages(workbook, sheet, items, { ...options, imageColumnIndex: keys.indexOf('image') + 1 });
+  }
   return workbook;
 }
 
@@ -310,4 +434,6 @@ module.exports = {
   detailsToOriginalOutput,
   createReferenceOutputWorkbook,
   createOriginalOutputWorkbook,
+  EXCEL_COLUMN_CATALOG,
+  createConfiguredOutputWorkbook,
 };

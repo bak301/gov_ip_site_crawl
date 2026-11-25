@@ -3,34 +3,33 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script>{ const embed = new URLSearchParams(location.search).get('embed'); if (embed === 'source' || embed === 'detail') document.documentElement.classList.add(`embed-${embed}`); }</script>
   <title>WipoPublish Vietnam Search</title>
   <link rel="icon" type="image/x-icon" href="favicon.ico?v=2">
   <link rel="shortcut icon" href="favicon.ico?v=2">
   <link rel="icon" type="image/png" sizes="512x512" href="data-searching.png?v=2">
   <link rel="apple-touch-icon" href="data-searching.png?v=2">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=20261025-header-settings">
 </head>
 <body>
   <header class="topbar">
-    <img class="brand-mark" src="data-searching.png" alt="">
+    <img class="brand-mark" src="data-searching.png" alt="WipoPublish Vietnam Search" id="brandMark">
     <div class="brand-copy">
-      <h1>WipoPublish Vietnam Search</h1>
+      <div class="brand-title-line">
+        <h1>WipoPublish Vietnam Search</h1>
+        <span id="connectionStatus" class="connection-pill">Connecting</span>
+      </div>
       <p>Vietnam patent records · snapshot history</p>
     </div>
     <div class="topbar-actions">
-      <span id="databaseStatus" class="db-pill"><span class="status-dot"></span> Connecting…</span>
-      <button id="typographySettingsButton" class="button ghost typography-button" type="button" title="Customize interface, heading, and content fonts">Typography</button>
-      <select id="presetSelect" aria-label="Scrape preset"></select>
-      <label class="retry-setting" for="retryCountInput" title="Number of retry attempts for each application">
-        <span>Retries</span>
-        <input id="retryCountInput" type="number" min="0" max="50" step="1" value="10" inputmode="numeric" aria-label="Retry count">
-      </label>
-      <button id="stopButton" class="button ghost danger" disabled>Stop</button>
+      <button id="wipoSiteStatus" class="site-pill" type="button" aria-live="polite" aria-haspopup="dialog" aria-controls="siteHistoryModal" title="Open WIPOPublish availability history">WIPO: checking…</button>
+      <button id="typographySettingsButton" class="button ghost typography-button" type="button" title="Settings" aria-label="Settings"><img class="settings-icon" src="setting.png?v=20260930-1720" alt=""></button>
+      <button id="stopButton" class="button ghost danger" disabled><span class="header-stop-icon" aria-hidden="true"></span><span>Stop</span></button>
       <label class="rescrape-toggle" title="Include applications that already have a stored snapshot">
         <input id="rescrapeCheckbox" type="checkbox">
         <span>Re-scrape</span>
       </label>
-      <button id="scrapeAllButton" class="button scrape-primary action-button"><span class="action-icon icon-refresh" aria-hidden="true"></span><span>Scrape All</span></button>
+      <button id="scrapeAllButton" class="button scrape-primary action-button bulk-scrape-button"><span class="action-icon icon-refresh" aria-hidden="true"></span><span>Scrape All</span><span id="scrapeAllCount" class="scrape-request-count hidden" aria-hidden="true"></span></button>
     </div>
   </header>
 
@@ -45,29 +44,72 @@
           <button id="removeNamedListButton" class="button outline compact named-list-icon-button remove-list-button" type="button" title="Remove selected case list" aria-label="Remove selected case list"><span class="named-list-icon icon-delete" aria-hidden="true"></span></button>
         </div>
         <div class="case-actions">
-          <button id="compactListButton" class="button outline compact list-density-button" type="button" aria-pressed="false" title="Switch to compact rows" aria-label="Switch to compact rows"><span class="list-density-icon" aria-hidden="true">↕</span><span class="list-density-label">Compact</span></button>
+          <button id="compactListButton" class="button outline compact list-density-button" type="button" aria-pressed="false" title="Default view active. Switch to Details view" aria-label="Default view active. Switch to Details view"><img class="list-density-icon" src="eye.png?v=20260930-1943" alt=""><span class="list-density-label">Default</span></button>
+          <button id="resetSortButton" class="button outline compact reset-sort-button" type="button" disabled title="Reset case-list sorting" aria-label="Reset case-list sorting"><span class="reset-sort-icon" aria-hidden="true">↕</span><span class="reset-sort-label">Reset sort</span></button>
           <button id="exportListButton" class="button excel-action compact action-button" title="Export list" aria-label="Export list"><span class="action-icon icon-excel" aria-hidden="true"></span><span class="action-label">Export list</span></button>
         </div>
       </div>
       <div class="list-head">
         <div id="selectAllHead" class="check-slot hidden"><input id="selectAllCheckbox" type="checkbox" checked aria-label="Select all"></div>
-        <div class="case-app-head">Application no.</div>
-        <div class="case-ref-head">Case ref</div>
-        <div class="case-time-head">Last scraped</div>
-        <button id="refreshAllButton" class="header-icon-button header-refresh" type="button" title="Scrape all queued applications" aria-label="Scrape all queued applications"><span class="action-icon icon-refresh" aria-hidden="true"></span></button>
+        <div class="case-column-head case-app-head"><button class="case-sort-button" type="button" data-case-sort="app"><span>APP NO.</span><span class="case-sort-priority" aria-hidden="true"></span><span class="case-sort-direction" aria-hidden="true"></span></button><button class="case-column-resizer" type="button" data-case-column="app" role="separator" aria-orientation="vertical" aria-label="Resize application number column" tabindex="0"></button></div>
+        <div class="case-column-head case-registration-head"><button class="case-sort-button" type="button" data-case-sort="registration"><span>Reg No.</span><span class="case-sort-priority" aria-hidden="true"></span><span class="case-sort-direction" aria-hidden="true"></span></button><button class="case-column-resizer" type="button" data-case-column="registration" role="separator" aria-orientation="vertical" aria-label="Resize registration number column" tabindex="0"></button></div>
+        <div class="case-column-head case-ref-head"><button class="case-sort-button" type="button" data-case-sort="reference"><span>Case ref</span><span class="case-sort-priority" aria-hidden="true"></span><span class="case-sort-direction" aria-hidden="true"></span></button><button class="case-column-resizer" type="button" data-case-column="reference" role="separator" aria-orientation="vertical" aria-label="Resize case reference column" tabindex="0"></button></div>
+        <div class="case-column-head case-attorney-head"><button class="case-sort-button" type="button" data-case-sort="attorney"><span>Attorney</span><span class="case-sort-priority" aria-hidden="true"></span><span class="case-sort-direction" aria-hidden="true"></span></button><button class="case-column-resizer" type="button" data-case-column="attorney" role="separator" aria-orientation="vertical" aria-label="Resize attorney column" tabindex="0"></button></div>
+        <div class="case-column-head case-client-head"><button class="case-sort-button" type="button" data-case-sort="client"><span>Client</span><span class="case-sort-priority" aria-hidden="true"></span><span class="case-sort-direction" aria-hidden="true"></span></button><button class="case-column-resizer" type="button" data-case-column="client" role="separator" aria-orientation="vertical" aria-label="Resize client column" tabindex="0"></button></div>
+        <div class="case-column-head case-applicant-head"><button class="case-sort-button" type="button" data-case-sort="applicant"><span>Applicant</span><span class="case-sort-priority" aria-hidden="true"></span><span class="case-sort-direction" aria-hidden="true"></span></button><button class="case-column-resizer" type="button" data-case-column="applicant" role="separator" aria-orientation="vertical" aria-label="Resize applicant column" tabindex="0"></button></div>
+        <div class="case-column-head case-applicationtype-head"><button class="case-sort-button" type="button" data-case-sort="applicationtype"><span>Application type</span><span class="case-sort-priority" aria-hidden="true"></span><span class="case-sort-direction" aria-hidden="true"></span></button><button class="case-column-resizer" type="button" data-case-column="applicationtype" role="separator" aria-orientation="vertical" aria-label="Resize application type column" tabindex="0"></button></div>
+        <div class="case-column-head case-wipostatus-head"><button class="case-sort-button" type="button" data-case-sort="wipostatus"><span>Status</span><span class="case-sort-priority" aria-hidden="true"></span><span class="case-sort-direction" aria-hidden="true"></span></button><button class="case-column-resizer" type="button" data-case-column="wipostatus" role="separator" aria-orientation="vertical" aria-label="Resize status column" tabindex="0"></button></div>
+        <div class="case-column-head case-grant-head"><button class="case-sort-button" type="button" data-case-sort="grant"><span>Grant no. / date</span><span class="case-sort-priority" aria-hidden="true"></span><span class="case-sort-direction" aria-hidden="true"></span></button><button class="case-column-resizer" type="button" data-case-column="grant" role="separator" aria-orientation="vertical" aria-label="Resize grant number and date column" tabindex="0"></button></div>
+        <div class="case-column-head case-expiry-head"><button class="case-sort-button" type="button" data-case-sort="expiry"><span>Expiry date</span><span class="case-sort-priority" aria-hidden="true"></span><span class="case-sort-direction" aria-hidden="true"></span></button><button class="case-column-resizer" type="button" data-case-column="expiry" role="separator" aria-orientation="vertical" aria-label="Resize expiry date column" tabindex="0"></button></div>
+        <div class="case-column-head case-representative-head"><button class="case-sort-button" type="button" data-case-sort="representative"><span>IP representatives</span><span class="case-sort-priority" aria-hidden="true"></span><span class="case-sort-direction" aria-hidden="true"></span></button><button class="case-column-resizer" type="button" data-case-column="representative" role="separator" aria-orientation="vertical" aria-label="Resize IP representatives column" tabindex="0"></button></div>
+        <div class="case-time-head" aria-label="Last scraped date, time, and status">
+          <div class="case-time-head-cell"><button class="case-sort-button" type="button" data-case-sort="date"><span>Date</span><span class="case-sort-priority" aria-hidden="true"></span><span class="case-sort-direction" aria-hidden="true"></span></button><button class="case-column-resizer" type="button" data-case-column="date" role="separator" aria-orientation="vertical" aria-label="Resize scraped date column" tabindex="0"></button></div>
+          <div class="case-time-head-cell"><button class="case-sort-button case-time-label" type="button" data-case-sort="clock"><span>Time</span><span class="case-sort-priority" aria-hidden="true"></span><span class="case-sort-direction" aria-hidden="true"></span></button><button class="case-column-resizer" type="button" data-case-column="clock" role="separator" aria-orientation="vertical" aria-label="Resize scraped time column" tabindex="0"></button></div>
+          <div class="case-time-head-cell"><button class="case-sort-button" type="button" data-case-sort="status"><span>Result</span><span class="case-sort-priority" aria-hidden="true"></span><span class="case-sort-direction" aria-hidden="true"></span></button><button class="case-column-resizer" type="button" data-case-column="status" role="separator" aria-orientation="vertical" aria-label="Resize result column" tabindex="0"></button></div>
+        </div>
+        <button id="refreshAllButton" class="header-icon-button header-refresh bulk-scrape-button" type="button" title="Scrape all queued applications" aria-label="Scrape all queued applications"><span class="action-icon icon-refresh" aria-hidden="true"></span><span id="refreshAllCount" class="scrape-request-count hidden" aria-hidden="true"></span></button>
         <button id="clearAllButton" class="header-icon-button header-trash" type="button" title="Clear all applications" aria-label="Clear all applications"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3m-9 0 1 13h10l1-13M10 11v6m4-6v6"/></svg></button>
       </div>
       <div id="caseList" class="case-list"></div>
       <div id="emptyList" class="empty-list">
         <div class="empty-icon">⌕</div>
         <strong>No applications loaded</strong>
-        <span>Add an application number or IP/PR reference below.</span>
+        <span>Add an application, case reference, or registration number below.</span>
       </div>
-      <section class="input-bar">
-        <div class="input-shell">
-          <span class="search-icon">＋</span>
-          <textarea id="applicationInput" rows="1" wrap="soft" placeholder="Application no. or IP/PR case ref" autocomplete="off" spellcheck="false" aria-label="Application numbers or IP/PR case references"></textarea>
-          <button id="addButton" class="button dark">Add</button>
+      <section class="input-bar input-stack">
+        <div class="input-mode-tabs" role="tablist" aria-label="Number type">
+          <button id="applicationInputTab" class="input-mode-tab active" type="button" role="tab" aria-controls="applicationInputPanel" aria-selected="true" tabindex="0" data-input-mode="application">Application</button>
+          <button id="registrationInputTab" class="input-mode-tab" type="button" role="tab" aria-controls="registrationInputPanel" aria-selected="false" tabindex="-1" data-input-mode="registration">Registration</button>
+          <button id="requestInputTab" class="input-mode-tab" type="button" role="tab" aria-controls="requestInputPanel" aria-selected="false" tabindex="-1" data-input-mode="request">Request no.</button>
+        </div>
+        <div id="applicationInputPanel" class="input-row input-mode-panel" role="tabpanel" aria-labelledby="applicationInputTab">
+          <label class="sr-only" for="applicationInput">Application</label>
+          <div class="input-shell">
+            <span class="search-icon">＋</span>
+            <div class="input-textarea-wrap"><textarea id="applicationInput" rows="1" wrap="soft" placeholder=" " autocomplete="off" spellcheck="false" aria-label="Application numbers, Hague DM design numbers, or IP case references"></textarea><span class="input-placeholder" aria-hidden="true">Application no., Hague DM no., or Case ref</span></div>
+            <button id="addButton" class="button dark">Add</button>
+          </div>
+        </div>
+        <div id="registrationInputPanel" class="input-row input-mode-panel registration-input-row hidden" role="tabpanel" aria-labelledby="registrationInputTab">
+          <label class="sr-only" for="registrationInput">Registration</label>
+          <div class="input-shell registration-shell" data-registration-type="patent">
+            <span class="search-icon">＋</span>
+            <div class="input-textarea-wrap"><textarea id="registrationInput" rows="1" wrap="soft" placeholder=" " autocomplete="off" spellcheck="false" aria-label="Registration numbers, including Hague DM numbers"></textarea><span class="input-placeholder" aria-hidden="true">Registration no. or Hague DM/213380</span></div>
+            <select id="registrationTypeSelect" class="registration-type-select" aria-label="Registration type">
+              <option value="patent">Patent</option>
+              <option value="design">Design</option>
+              <option value="trademark">Trademark</option>
+            </select>
+            <button id="addRegistrationButton" class="button registration-add-button">Add</button>
+          </div>
+        </div>
+        <div id="requestInputPanel" class="input-row input-mode-panel request-input-row hidden" role="tabpanel" aria-labelledby="requestInputTab">
+          <label class="sr-only" for="requestInput">Request no.</label>
+          <div class="input-shell">
+            <span class="search-icon">＋</span>
+            <div class="input-textarea-wrap"><textarea id="requestInput" rows="1" wrap="soft" placeholder=" " autocomplete="off" spellcheck="false" aria-label="DT1, DT2, GH3, or GH4 request numbers"></textarea><span class="input-placeholder" aria-hidden="true">DT1/DT2, GH3, or GH4-YYYY-NNNNN</span></div>
+            <button id="addRequestButton" class="button dark" type="button">Add</button>
+          </div>
         </div>
       </section>
     </aside>
@@ -80,6 +122,26 @@
         <h2>Select an application</h2>
         <p>Its latest parsed data and every stored version will appear here.</p>
       </div>
+      <div id="requestDetail" class="request-detail hidden">
+        <div class="request-detail-heading">
+          <div class="request-detail-title"><span class="eyebrow">Publication request</span><h2 id="requestDetailNo"></h2><p id="requestDetailKind"></p></div>
+          <div class="request-detail-actions">
+            <select id="requestDocumentSelect" class="request-document-select hidden" aria-label="Choose request publication PDF"></select>
+            <button id="requestPrintPdfButton" class="button print-pdf action-button icon-only" type="button" title="Print this request PDF" aria-label="Print this request PDF" disabled><svg class="action-icon icon-print" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8V4h10v4M7 17H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2M7 14h10v7H7zM17 12h1"/></svg></button>
+            <button id="requestSavePdfButton" class="button pdf-export action-button icon-only" type="button" title="Save this request PDF" aria-label="Save this request PDF" disabled><span class="action-icon icon-pdf" aria-hidden="true"></span></button>
+          </div>
+        </div>
+        <div id="requestDetailMeta" class="request-detail-meta"></div>
+        <div id="requestViewerShell" class="request-viewer-shell hidden">
+          <div class="request-viewer-toolbar"><span>PDF preview</span><div class="publication-zoom-controls"><button id="requestZoomOutButton" class="button publication-zoom-button" type="button" aria-label="Zoom out">−</button><button id="requestZoomResetButton" class="button publication-zoom-level" type="button" aria-label="Reset zoom">100%</button><button id="requestZoomInButton" class="button publication-zoom-button" type="button" aria-label="Zoom in">+</button></div></div>
+          <div class="request-viewer-content"><div id="requestPublicationLoading" class="publication-loading">Loading publication PDF…</div><div id="requestPublicationPages" class="publication-pages" aria-label="Request publication PDF viewer"></div></div>
+        </div>
+      </div>
+      <div id="hagueDetail" class="hague-detail hidden">
+        <div class="hague-detail-header"><div><span class="eyebrow">Hague international design</span><h2 id="hagueDetailNo"></h2><p id="hagueDetailStatus"></p></div><div class="hague-header-actions"><button id="hagueFetchAllButton" class="button outline" type="button">Load all DM</button><button id="hagueRefreshButton" class="button outline" type="button">Refresh Hague</button><button id="haguePrintButton" class="button print-pdf action-button icon-only" type="button" title="Print this Hague record" aria-label="Print this Hague record" disabled><svg class="action-icon icon-print" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8V4h10v4M7 17H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2M7 14h10v7H7zM17 12h1"/></svg></button><button id="hagueDownloadButton" class="button pdf-export action-button icon-only" type="button" title="Save this Hague record as PDF" aria-label="Save this Hague record as PDF" disabled><span class="action-icon icon-pdf" aria-hidden="true"></span></button></div></div>
+        <div id="hagueSnapshotBar" class="hague-snapshot-bar hidden"><label>Viewing snapshot <select id="hagueSnapshotSelect" aria-label="Hague stored snapshot"></select></label><button id="hagueChangeSummary" class="change-summary" type="button" aria-haspopup="dialog">No changes</button></div>
+        <div id="hagueDetailBody" class="hague-detail-body"></div>
+      </div>
       <div id="detailContent" class="detail-content hidden">
         <div class="detail-sticky">
           <div class="detail-heading">
@@ -88,8 +150,8 @@
                 <h2 id="detailApplicationNo"></h2>
                 <span id="detailRecordType" class="record-type-tag"></span>
                 <span id="detailCaseRef" class="case-ref-badge hidden"></span>
+                <span id="detailStatus" class="status-tag"></span>
               </div>
-              <div class="detail-status-line"><span id="detailStatus" class="status-tag"></span></div>
             </div>
             <div class="detail-actions">
               <div class="publication-quick-actions" aria-label="Available publication documents">
@@ -97,7 +159,7 @@
                 <button id="publicationBButton" class="button publication-action" data-publication-category="publication_b" aria-label="Publication B" disabled><span class="publication-label-full">Publication B</span><span class="publication-label-short">Pub B</span><span class="publication-label-tiny">B</span><span class="publication-count">—</span></button>
                 <button id="annuityButton" class="button publication-action" data-publication-category="annuity" aria-label="Annuity" disabled><span class="publication-label-full">Annuity</span><span class="publication-label-short">Ann</span><span class="publication-label-tiny">Ann</span><span class="publication-count">—</span></button>
               </div>
-              <button id="scrapeOneButton" class="button scrape-primary action-button icon-only" title="Scrape this application" aria-label="Scrape this application"><span class="action-icon icon-refresh" aria-hidden="true"></span></button>
+              <button id="scrapeOneButton" class="button scrape-primary action-button icon-only scrape-one-button" title="Scrape this application" aria-label="Scrape this application"><span class="action-icon icon-refresh" aria-hidden="true"></span><span id="scrapeOneCount" class="scrape-request-count hidden" aria-hidden="true"></span></button>
               <button id="exportOneButton" class="button excel-action action-button icon-only" title="Export this application to Excel" aria-label="Export this application to Excel"><span class="action-icon icon-excel" aria-hidden="true"></span></button>
               <button id="printPdfButton" class="button print-pdf action-button icon-only" title="Print this application" aria-label="Print this application"><svg class="action-icon icon-print" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8V4h10v4M7 17H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2M7 14h10v7H7zM17 12h1"/></svg></button>
               <button id="downloadPdfButton" class="button pdf-export action-button icon-only" title="Download this application as PDF" aria-label="Download this application as PDF"><span class="action-icon icon-pdf" aria-hidden="true"></span></button>
@@ -108,7 +170,7 @@
               <span class="snapshot-label">Viewing snapshot</span>
               <select id="snapshotSelect"></select>
             </div>
-            <div id="changeSummary" class="change-summary"></div>
+            <button id="changeSummary" class="change-summary" type="button" aria-haspopup="dialog"></button>
           </div>
         </div>
         <header id="printReportHeader" class="print-report-header" aria-hidden="true">
@@ -133,28 +195,179 @@
 
   <footer class="statusbar">
     <div id="runStatus"><span class="status-dot ready"></span> Ready</div>
-    <button id="toggleLogButton" class="log-toggle">Activity log</button>
+    <button id="toggleLogButton" class="log-toggle">HTTP results</button>
   </footer>
-  <section id="logDrawer" class="log-drawer hidden"><pre id="logOutput"></pre></section>
+  <section id="logDrawer" class="log-drawer hidden" aria-label="WIPO HTTP results">
+    <div class="http-log-heading"><span>Time</span><span>Application</span><span>HTTP</span><span>Response</span></div>
+    <div id="logOutput" class="http-log-rows" role="log" aria-live="off"><div class="http-log-empty">HTTP responses will appear here.</div></div>
+  </section>
   <div id="toast" class="toast hidden"></div>
+  <div id="imagePreviewModal" class="image-preview-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="imagePreviewTitle">
+    <div class="image-preview-modal">
+      <div class="image-preview-heading">
+        <div>
+          <h2 id="imagePreviewTitle">Record image</h2>
+          <div id="imagePreviewMeta" class="image-preview-meta"></div>
+        </div>
+        <button id="closeImagePreviewButton" class="image-preview-close" type="button" aria-label="Close image preview">×</button>
+      </div>
+      <div id="imagePreviewThumbnails" class="image-preview-thumbnails" aria-label="Record image thumbnails"></div>
+      <div class="image-preview-body">
+        <div class="image-preview-stage">
+          <button id="previousImageButton" class="image-preview-nav previous" type="button" aria-label="Previous image">‹</button>
+          <img id="imagePreviewMain" alt="">
+          <button id="nextImageButton" class="image-preview-nav next" type="button" aria-label="Next image">›</button>
+        </div>
+        <aside class="image-preview-data" aria-label="Application data">
+          <div><span>Application</span><strong id="imagePreviewApplication"></strong></div>
+          <div><span>Record type</span><strong id="imagePreviewType"></strong></div>
+          <div><span>Case ref</span><strong id="imagePreviewCaseRef"></strong></div>
+          <div><span>Status</span><strong id="imagePreviewStatus"></strong></div>
+          <div><span>Viewing</span><strong id="imagePreviewPosition"></strong></div>
+        </aside>
+      </div>
+    </div>
+  </div>
   <div id="publicationModal" class="modal-backdrop publication-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="publicationModalTitle">
     <div class="publication-modal">
       <div class="publication-modal-heading">
-        <div>
-          <h2 id="publicationModalTitle">Publication PDF</h2>
-          <div id="publicationModalMeta" class="publication-modal-meta"></div>
+        <div class="publication-heading-main">
+          <div class="publication-heading-copy">
+            <h2 id="publicationModalTitle">Publication PDF</h2>
+            <div id="publicationModalMeta" class="publication-modal-meta"></div>
+          </div>
+          <button id="closePublicationModalButton" class="modal-close" type="button" aria-label="Close publication PDF">×</button>
+        </div>
+        <div class="publication-toolbar-row">
           <div id="publicationTabs" class="publication-tabs" role="tablist" aria-label="Publication document type">
             <button type="button" data-publication-category="publication_a">Publication A <span>0</span></button>
             <button type="button" data-publication-category="publication_b">Publication B <span>0</span></button>
             <button type="button" data-publication-category="annuity">Annuity <span>0</span></button>
           </div>
+          <label id="publicationAllLabel" class="publication-all-option hidden"><input id="publicationAllCheckbox" type="checkbox"> <span>All</span></label>
+          <select id="publicationDocumentSelect" class="publication-document-select hidden" aria-label="Choose publication document"></select>
+          <div class="publication-document-actions" aria-label="Publication PDF actions">
+            <div class="publication-zoom-controls" aria-label="PDF zoom controls">
+              <button id="publicationZoomOutButton" class="button publication-zoom-button" type="button" title="Zoom out" aria-label="Zoom out">−</button>
+              <button id="publicationZoomResetButton" class="button publication-zoom-level" type="button" title="Reset zoom" aria-label="Reset PDF zoom">100%</button>
+              <button id="publicationZoomInButton" class="button publication-zoom-button" type="button" title="Zoom in" aria-label="Zoom in">+</button>
+            </div>
+            <button id="printPublicationButton" class="button print-pdf action-button icon-only" type="button" title="Print this publication PDF" aria-label="Print this publication PDF" disabled><svg class="action-icon icon-print" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8V4h10v4M7 17H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2M7 14h10v7H7zM17 12h1"/></svg></button>
+            <button id="savePublicationPdfButton" class="button pdf-export action-button icon-only" type="button" title="Save this publication PDF" aria-label="Save this publication PDF" disabled><span class="action-icon icon-pdf" aria-hidden="true"></span></button>
+          </div>
         </div>
-        <select id="publicationDocumentSelect" class="publication-document-select hidden" aria-label="Choose publication document"></select>
-        <button id="closePublicationModalButton" class="modal-close" type="button" aria-label="Close publication PDF">×</button>
       </div>
       <div class="publication-viewer-shell">
         <div id="publicationLoading" class="publication-loading">Loading publication PDF…</div>
         <div id="publicationPages" class="publication-pages" aria-label="Publication PDF viewer"></div>
+      </div>
+    </div>
+  </div>
+  <div id="exportModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="exportModalTitle">
+    <div class="export-modal">
+      <div class="confirm-modal-heading">
+        <div><h2 id="exportModalTitle">Export case list</h2><p>Choose one or more outputs. Multiple files are delivered in one ZIP.</p></div>
+        <button id="closeExportModalButton" class="modal-close" type="button" aria-label="Close export options">×</button>
+      </div>
+      <div class="export-option-grid">
+        <section class="export-option application-export-option">
+          <button class="export-toggle" data-export-toggle="excel" type="button" aria-pressed="true"><span class="export-format-icon icon-excel" aria-hidden="true"></span><span><strong>Excel</strong><small>Structured list and images</small></span><span class="export-check">✓</span></button>
+          <label>Sort by<select data-export-sort="excel"><option value="application">Application no.</option><option value="case_ref">Known case ref</option><option value="registration">Registration no.</option></select></label>
+          <details class="excel-column-config"><summary>Configure Excel columns</summary><label class="excel-current-only"><input id="excelCurrentApplicantsOnly" type="checkbox" checked> Current applicants only</label><small>Earlier applicants come from older stored snapshots, when available.</small><div class="excel-column-actions"><button id="excelSelectAllColumns" type="button">Select all</button><button id="excelResetColumns" type="button">Defaults</button></div><div id="excelColumnChoices" class="excel-column-choices" role="group" aria-label="Excel output columns"></div></details>
+        </section>
+        <section class="export-option application-export-option">
+          <button class="export-toggle" data-export-toggle="applicationPdf" type="button" aria-pressed="false"><span class="export-format-icon icon-pdf" aria-hidden="true"></span><span><strong>Application PDF</strong><small>One merged printable report</small></span><span class="export-check">✓</span></button>
+          <label>Sort by<select data-export-sort="applicationPdf"><option value="application">Application no.</option><option value="case_ref">Known case ref</option><option value="registration">Registration no.</option></select></label>
+        </section>
+        <section class="export-option publication-export-option application-export-option">
+          <button class="export-toggle publication-master" data-export-toggle="publication" type="button" aria-pressed="false"><span class="export-format-icon publication-book-icon" aria-hidden="true">▤</span><span><strong>Publication</strong><small>Combined official documents</small></span><span class="export-check">✓</span></button>
+          <div class="publication-export-types">
+            <button type="button" data-export-toggle="publicationA" aria-pressed="false">A</button>
+            <button type="button" data-export-toggle="publicationB" aria-pressed="false">B</button>
+            <button type="button" data-export-toggle="annuity" aria-pressed="false">Annuity</button>
+          </div>
+          <div class="publication-sort-grid">
+            <label>A sort<select data-export-sort="publicationA"><option value="application">Application no.</option><option value="publication_order">Publication issue</option><option value="case_ref">Known case ref</option><option value="registration">Registration no.</option></select></label>
+            <label>B sort<select data-export-sort="publicationB"><option value="registration">Registration no.</option><option value="publication_order">Publication issue</option><option value="application">Application no.</option><option value="case_ref">Known case ref</option></select></label>
+            <label>Annuity sort<select data-export-sort="annuity"><option value="registration">Registration no.</option><option value="publication_order">Annuity issue</option><option value="application">Application no.</option><option value="case_ref">Known case ref</option></select></label>
+          </div>
+        </section>
+        <section class="export-option request-export-option hidden">
+          <button class="export-toggle" data-export-toggle="requestExcel" type="button" aria-pressed="true"><span class="export-format-icon icon-excel" aria-hidden="true"></span><span><strong>Request Excel</strong><small>All parsed publication fields</small></span><span class="export-check">✓</span></button>
+        </section>
+        <section class="export-option request-export-option hidden">
+          <button class="export-toggle" data-export-toggle="requestPdf" type="button" aria-pressed="true"><span class="export-format-icon icon-pdf" aria-hidden="true"></span><span><strong>Request publications</strong><small>One combined PDF of matched pages</small></span><span class="export-check">✓</span></button>
+        </section>
+        <section class="export-option hague-export-option hidden">
+          <button class="export-toggle" data-export-toggle="hagueExcel" type="button" aria-pressed="true"><span class="export-format-icon icon-excel" aria-hidden="true"></span><span><strong>Hague Excel</strong><small>Designs and VN decisions</small></span><span class="export-check">✓</span></button>
+          <label>Sort by<select data-export-sort="hagueExcel"><option value="registration">Hague no.</option><option value="vn_application">VN application no.</option><option value="status">VN status</option><option value="holder">Holder</option></select></label>
+        </section>
+        <section class="export-option hague-export-option hidden">
+          <button class="export-toggle" data-export-toggle="hagueRefusals" type="button" aria-pressed="false"><span class="export-format-icon icon-pdf" aria-hidden="true"></span><span><strong>Refusal notices</strong><small>All cached VN refusal PDFs for selected Hague designs</small></span><span class="export-check">✓</span></button>
+          <label>Sort by<select data-export-sort="hagueRefusals"><option value="registration">Hague no.</option><option value="vn_application">VN application no.</option><option value="status">VN status</option><option value="holder">Holder</option></select></label>
+          <label class="hague-combine-choice"><input type="checkbox" id="combineHagueRefusals"> Combined — one PDF (unchecked: ZIP with separate notices)</label>
+        </section>
+      </div>
+      <div class="export-modal-footer"><span id="exportProgress">Select outputs to export.</span><button id="cancelExportButton" class="button outline" type="button">Cancel</button><button id="runBatchExportButton" class="button dark" type="button">Export all</button></div>
+    </div>
+  </div>
+  <div id="changeHistoryModal" class="modal-backdrop change-history-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="changeHistoryTitle">
+    <div class="change-history-modal">
+      <div class="change-history-heading">
+        <div>
+          <h2 id="changeHistoryTitle">Change history</h2>
+          <p id="changeHistoryMeta"></p>
+        </div>
+        <button id="closeChangeHistoryButton" class="modal-close" type="button" aria-label="Close change history">×</button>
+      </div>
+      <div class="change-history-layout">
+        <aside class="change-timeline-panel" aria-label="Snapshot timeline">
+          <div class="change-history-section-label">Snapshot timeline</div>
+          <div id="changeTimelineList" class="change-timeline-list"></div>
+        </aside>
+        <section class="change-comparison-panel" aria-labelledby="changeComparisonTitle">
+          <div class="change-comparison-heading">
+            <div>
+              <h3 id="changeComparisonTitle">Changes in this snapshot</h3>
+              <p id="changeComparisonMeta"></p>
+            </div>
+            <label class="change-diff-toggle" title="Highlight exact text differences between previous and new values">
+              <input id="changeDiffHighlightCheckbox" type="checkbox">
+              <span>Highlight differences</span>
+            </label>
+            <span id="changeComparisonCount" class="change-count-badge"></span>
+          </div>
+          <div class="change-table-scroll">
+            <table class="change-comparison-table">
+              <thead><tr><th>Field</th><th>Previous value</th><th>New value</th><th>Change</th></tr></thead>
+              <tbody id="changeComparisonBody"></tbody>
+            </table>
+            <div id="changeComparisonEmpty" class="change-comparison-empty hidden">No fields changed in this snapshot.</div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+  <div id="siteHistoryModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="siteHistoryTitle">
+    <div class="site-history-modal">
+      <div class="site-history-heading">
+        <div>
+          <h2 id="siteHistoryTitle">WIPOPublish availability</h2>
+          <p id="siteHistoryTimeBasis">Last 30 Hanoi days (GMT+7) · about one sample per minute, plus status changes</p>
+        </div>
+        <button id="closeSiteHistoryButton" class="modal-close" type="button" aria-label="Close availability history">×</button>
+      </div>
+      <div class="site-history-content">
+        <div class="site-history-summary"><strong id="siteHistoryPercent">Loading history…</strong><span id="siteHistoryTotals"></span></div>
+        <div id="siteHistoryDays" class="site-history-days" role="group" aria-label="Availability by Hanoi day"></div>
+        <div class="site-history-range"><span>30 days ago</span><span>Today</span></div>
+        <div class="site-history-legend"><span><i class="up"></i> All verified checks passed</span><span><i class="mixed"></i> Some failed (under 25%) or unverified</span><span><i class="down"></i> 25% or more verified checks failed</span><span><i class="unknown"></i> Unverified only</span><span><i class="none"></i> No checks</span></div>
+        <div class="site-history-day-heading"><h3 id="siteHistoryDayTitle">Day details</h3><span id="siteHistoryDayStats"></span></div>
+        <div id="siteHistoryHours" class="site-history-hours" role="group" aria-label="Availability by Hanoi hour"></div>
+        <div class="site-history-range"><span>00:00 GMT+7</span><span>23:00 GMT+7</span></div>
+        <h3 id="siteHistoryChecksTitle" class="site-history-checks-title">Checks and successful scrapes</h3>
+        <div class="site-history-checks-scroll"><table class="site-history-checks"><thead><tr><th>Time (GMT+7)</th><th>Result</th><th>HTTP</th><th>Detail / application no.</th></tr></thead><tbody id="siteHistoryChecks"></tbody></table><p id="siteHistoryEmpty" class="site-history-empty hidden">No checks or successful scrapes were recorded in this hour.</p></div>
+        <p id="siteHistoryNote" class="site-history-note">Bars summarize recorded checks; gaps mean the monitor was not running, not that the site was available.</p>
       </div>
     </div>
   </div>
@@ -196,11 +409,21 @@
     <div class="typography-modal">
       <div class="confirm-modal-heading">
         <div>
-          <h2 id="typographyTitle">Typography settings</h2>
-          <p>Customize fonts and text sizes for this browser.</p>
+          <h2 id="typographyTitle">Settings</h2>
+          <p>Customize scraping and display settings for this browser.</p>
         </div>
         <button id="closeTypographyButton" class="modal-close" type="button" aria-label="Close typography settings">×</button>
       </div>
+      <section class="scrape-settings-section" aria-labelledby="scrapeSettingsTitle">
+        <div class="settings-section-heading">
+          <h3 id="scrapeSettingsTitle">Scraping</h3>
+          <p>Up to five consecutive requests per record, then it returns to the queue until the cap is reached.</p>
+        </div>
+        <div class="scrape-settings-controls">
+          <label for="presetSelect"><span>Run preset</span><select id="presetSelect" aria-label="Scrape preset"></select></label>
+          <label for="retryCountInput"><span>Scrape cap per record</span><input id="retryCountInput" type="number" min="1" max="100" step="1" value="25" inputmode="numeric" aria-label="Scrape cap per record"></label>
+        </div>
+      </section>
       <div class="typography-grid">
         <div class="typography-grid-head">Area</div><div class="typography-grid-head">Font</div><div class="typography-grid-head">Size</div>
         <label for="interfaceFontSelect"><strong>Interface</strong><span>Buttons, lists and controls</span></label>
@@ -217,14 +440,46 @@
         <strong>Preview heading</strong>
         <span>Class 05: Dược phẩm · Patent and trademark record content</span>
       </div>
+      <section class="column-settings-section" aria-labelledby="columnSettingsTitle">
+        <div class="settings-section-heading">
+          <h3 id="columnSettingsTitle">Case-list columns</h3>
+          <p>The pixel value is the fixed column size. Only columns explicitly marked Squishable may contract below it.</p>
+        </div>
+        <div id="columnSortTypeGrid" class="column-minimum-grid">
+          <div class="column-settings-head"><span>Column</span><span>Size</span><span>Hide</span><span>Squishable</span><span>Header</span><span>Contents</span><span>Sort as</span></div>
+          <div class="column-setting-row"><strong>APP NO.</strong><span class="column-width-control"><input id="appColumnMinimum" type="number" min="44" max="150" step="2" value="70" aria-label="Application number column size"><small>px</small></span><label class="column-option"><input id="appColumnHidden" type="checkbox"><span>Hide APP NO.</span></label><label class="column-option"><input id="appColumnSquishable" type="checkbox" checked><span>Squish APP NO.</span></label><select class="column-alignment-select" data-case-alignment-column="app" data-case-alignment-target="header" aria-label="Application number header alignment"><option value="left">Left</option><option value="center" selected>Center</option><option value="right">Right</option></select><select class="column-alignment-select" data-case-alignment-column="app" data-case-alignment-target="content" aria-label="Application number content alignment"><option value="left" selected>Left</option><option value="center">Center</option><option value="right">Right</option></select></div>
+          <div class="column-setting-row"><strong>Reg No.</strong><span class="column-width-control"><input id="registrationColumnMinimum" type="number" min="44" max="170" step="2" value="90" aria-label="Registration number column size"><small>px</small></span><label class="column-option"><input id="registrationColumnHidden" type="checkbox"><span>Hide Reg No.</span></label><label class="column-option"><input id="registrationColumnSquishable" type="checkbox" checked><span>Squish Reg No.</span></label><select class="column-alignment-select" data-case-alignment-column="registration" data-case-alignment-target="header" aria-label="Registration number header alignment"><option value="left">Left</option><option value="center" selected>Center</option><option value="right">Right</option></select><select class="column-alignment-select" data-case-alignment-column="registration" data-case-alignment-target="content" aria-label="Registration number content alignment"><option value="left" selected>Left</option><option value="center">Center</option><option value="right">Right</option></select></div>
+          <div class="column-setting-row"><strong>Case ref</strong><span class="column-width-control"><input id="referenceColumnMinimum" type="number" min="44" max="142" step="2" value="62" aria-label="Case reference column size"><small>px</small></span><label class="column-option"><input id="referenceColumnHidden" type="checkbox"><span>Hide Case ref</span></label><label class="column-option"><input id="referenceColumnSquishable" type="checkbox" checked><span>Squish Case ref</span></label><select class="column-alignment-select" data-case-alignment-column="reference" data-case-alignment-target="header" aria-label="Case reference header alignment"><option value="left">Left</option><option value="center" selected>Center</option><option value="right">Right</option></select><select class="column-alignment-select" data-case-alignment-column="reference" data-case-alignment-target="content" aria-label="Case reference content alignment"><option value="left" selected>Left</option><option value="center">Center</option><option value="right">Right</option></select></div>
+          <div class="column-setting-row"><strong>Attorney</strong><span class="column-width-control"><input id="attorneyColumnMinimum" type="number" min="44" max="72" step="2" value="undefined" aria-label="Attorney column size"><small>px</small></span><label class="column-option"><input id="attorneyColumnHidden" type="checkbox"><span>Hide Attorney</span></label><label class="column-option"><input id="attorneyColumnSquishable" type="checkbox" checked><span>Squish Attorney</span></label><select class="column-alignment-select" data-case-alignment-column="attorney" data-case-alignment-target="header" aria-label="Attorney header alignment"><option value="left">Left</option><option value="center" selected>Center</option><option value="right">Right</option></select><select class="column-alignment-select" data-case-alignment-column="attorney" data-case-alignment-target="content" aria-label="Attorney content alignment"><option value="left" selected>Left</option><option value="center">Center</option><option value="right">Right</option></select></div>
+          <div class="column-setting-row"><strong>Client</strong><span class="column-width-control"><input id="clientColumnMinimum" type="number" min="44" max="76" step="2" value="undefined" aria-label="Client column size"><small>px</small></span><label class="column-option"><input id="clientColumnHidden" type="checkbox"><span>Hide Client</span></label><label class="column-option"><input id="clientColumnSquishable" type="checkbox" checked><span>Squish Client</span></label><select class="column-alignment-select" data-case-alignment-column="client" data-case-alignment-target="header" aria-label="Client header alignment"><option value="left">Left</option><option value="center" selected>Center</option><option value="right">Right</option></select><select class="column-alignment-select" data-case-alignment-column="client" data-case-alignment-target="content" aria-label="Client content alignment"><option value="left" selected>Left</option><option value="center">Center</option><option value="right">Right</option></select></div>
+          <div class="column-setting-row"><strong>Applicant</strong><span class="column-width-control"><input id="applicantColumnMinimum" type="number" min="44" max="82" step="2" value="undefined" aria-label="Applicant column size"><small>px</small></span><label class="column-option"><input id="applicantColumnHidden" type="checkbox"><span>Hide Applicant</span></label><label class="column-option"><input id="applicantColumnSquishable" type="checkbox" checked><span>Squish Applicant</span></label><select class="column-alignment-select" data-case-alignment-column="applicant" data-case-alignment-target="header" aria-label="Applicant header alignment"><option value="left">Left</option><option value="center" selected>Center</option><option value="right">Right</option></select><select class="column-alignment-select" data-case-alignment-column="applicant" data-case-alignment-target="content" aria-label="Applicant content alignment"><option value="left" selected>Left</option><option value="center">Center</option><option value="right">Right</option></select></div>
+          <div class="column-setting-row"><strong>Application type</strong><span class="column-width-control"><input id="applicationtypeColumnMinimum" type="number" min="44" max="172" step="2" value="92" aria-label="Application type column size"><small>px</small></span><label class="column-option"><input id="applicationtypeColumnHidden" type="checkbox" checked><span>Hide Application type</span></label><label class="column-option"><input id="applicationtypeColumnSquishable" type="checkbox" checked><span>Squish Application type</span></label><select class="column-alignment-select" data-case-alignment-column="applicationtype" data-case-alignment-target="header" aria-label="Application type header alignment"><option value="left">Left</option><option value="center" selected>Center</option><option value="right">Right</option></select><select class="column-alignment-select" data-case-alignment-column="applicationtype" data-case-alignment-target="content" aria-label="Application type content alignment"><option value="left" selected>Left</option><option value="center">Center</option><option value="right">Right</option></select></div>
+          <div class="column-setting-row"><strong>Status</strong><span class="column-width-control"><input id="wipostatusColumnMinimum" type="number" min="44" max="200" step="2" value="120" aria-label="Status column size"><small>px</small></span><label class="column-option"><input id="wipostatusColumnHidden" type="checkbox" checked><span>Hide Status</span></label><label class="column-option"><input id="wipostatusColumnSquishable" type="checkbox" checked><span>Squish Status</span></label><select class="column-alignment-select" data-case-alignment-column="wipostatus" data-case-alignment-target="header" aria-label="Status header alignment"><option value="left">Left</option><option value="center" selected>Center</option><option value="right">Right</option></select><select class="column-alignment-select" data-case-alignment-column="wipostatus" data-case-alignment-target="content" aria-label="Status content alignment"><option value="left" selected>Left</option><option value="center">Center</option><option value="right">Right</option></select></div>
+          <div class="column-setting-row"><strong>Grant no. / date</strong><span class="column-width-control"><input id="grantColumnMinimum" type="number" min="44" max="195" step="2" value="115" aria-label="Grant number and date column size"><small>px</small></span><label class="column-option"><input id="grantColumnHidden" type="checkbox" checked><span>Hide Grant no. / date</span></label><label class="column-option"><input id="grantColumnSquishable" type="checkbox" checked><span>Squish Grant no. / date</span></label><select class="column-alignment-select" data-case-alignment-column="grant" data-case-alignment-target="header" aria-label="Grant number and date header alignment"><option value="left">Left</option><option value="center" selected>Center</option><option value="right">Right</option></select><select class="column-alignment-select" data-case-alignment-column="grant" data-case-alignment-target="content" aria-label="Grant number and date content alignment"><option value="left" selected>Left</option><option value="center">Center</option><option value="right">Right</option></select></div>
+          <div class="column-setting-row"><strong>Expiry date</strong><span class="column-width-control"><input id="expiryColumnMinimum" type="number" min="44" max="150" step="2" value="82" aria-label="Expiry date column size"><small>px</small></span><label class="column-option"><input id="expiryColumnHidden" type="checkbox" checked><span>Hide Expiry date</span></label><label class="column-option"><input id="expiryColumnSquishable" type="checkbox" checked><span>Squish Expiry date</span></label><select class="column-alignment-select" data-case-alignment-column="expiry" data-case-alignment-target="header" aria-label="Expiry date header alignment"><option value="left">Left</option><option value="center" selected>Center</option><option value="right">Right</option></select><select class="column-alignment-select" data-case-alignment-column="expiry" data-case-alignment-target="content" aria-label="Expiry date content alignment"><option value="left" selected>Left</option><option value="center">Center</option><option value="right">Right</option></select></div>
+          <div class="column-setting-row"><strong>IP representatives</strong><span class="column-width-control"><input id="representativeColumnMinimum" type="number" min="44" max="210" step="2" value="130" aria-label="IP representatives column size"><small>px</small></span><label class="column-option"><input id="representativeColumnHidden" type="checkbox" checked><span>Hide IP representatives</span></label><label class="column-option"><input id="representativeColumnSquishable" type="checkbox" checked><span>Squish IP representatives</span></label><select class="column-alignment-select" data-case-alignment-column="representative" data-case-alignment-target="header" aria-label="IP representatives header alignment"><option value="left">Left</option><option value="center" selected>Center</option><option value="right">Right</option></select><select class="column-alignment-select" data-case-alignment-column="representative" data-case-alignment-target="content" aria-label="IP representatives content alignment"><option value="left" selected>Left</option><option value="center">Center</option><option value="right">Right</option></select></div>
+          <div class="column-setting-row"><strong>Date</strong><span class="column-width-control"><input id="dateColumnMinimum" type="number" min="44" max="130" step="2" value="60" aria-label="Date column size"><small>px</small></span><label class="column-option"><input id="dateColumnHidden" type="checkbox"><span>Hide Date</span></label><label class="column-option"><input id="dateColumnSquishable" type="checkbox" checked><span>Squish Date</span></label><select class="column-alignment-select" data-case-alignment-column="date" data-case-alignment-target="header" aria-label="Date header alignment"><option value="left">Left</option><option value="center" selected>Center</option><option value="right">Right</option></select><select class="column-alignment-select" data-case-alignment-column="date" data-case-alignment-target="content" aria-label="Date content alignment"><option value="left" selected>Left</option><option value="center">Center</option><option value="right">Right</option></select></div>
+          <div class="column-setting-row"><strong>Time</strong><span class="column-width-control"><input id="clockColumnMinimum" type="number" min="44" max="100" step="2" value="58" aria-label="Time column size"><small>px</small></span><label class="column-option"><input id="clockColumnHidden" type="checkbox"><span>Hide Time</span></label><label class="column-option"><input id="clockColumnSquishable" type="checkbox" checked><span>Allow Time to shrink to zero</span></label><select class="column-alignment-select" data-case-alignment-column="clock" data-case-alignment-target="header" aria-label="Time header alignment"><option value="left">Left</option><option value="center" selected>Center</option><option value="right">Right</option></select><select class="column-alignment-select" data-case-alignment-column="clock" data-case-alignment-target="content" aria-label="Time content alignment"><option value="left" selected>Left</option><option value="center">Center</option><option value="right">Right</option></select></div>
+          <div class="column-setting-row"><strong>Result</strong><span class="column-width-control"><input id="statusColumnMinimum" type="number" min="44" max="144" step="2" value="64" aria-label="Result column size"><small>px</small></span><label class="column-option"><input id="statusColumnHidden" type="checkbox" disabled><span>Result always visible</span></label><label class="column-option"><input id="statusColumnSquishable" type="checkbox" disabled><span>Result keeps its configured size</span></label><select class="column-alignment-select" data-case-alignment-column="status" data-case-alignment-target="header" aria-label="Result header alignment"><option value="left">Left</option><option value="center" selected>Center</option><option value="right">Right</option></select><select class="column-alignment-select" data-case-alignment-column="status" data-case-alignment-target="content" aria-label="Result content alignment"><option value="left" selected>Left</option><option value="center">Center</option><option value="right">Right</option></select></div>
+        </div>
+      </section>
       <div class="confirm-modal-actions">
         <button id="resetTypographyButton" class="button outline" type="button">Reset defaults</button>
         <button id="saveTypographyButton" class="button dark" type="button">Done</button>
       </div>
     </div>
   </div>
-  <script src="lan-bridge.js"></script>
-  <script type="module" src="publication-viewer.mjs"></script>
-  <script src="renderer.js"></script>
+  <script src="lan-bridge.js?v=20261005-1"></script>
+  <script type="module" src="publication-viewer.mjs?v=20261007-4"></script>
+  <script data-softip-display-hash-loader>
+    document.write(`<script src="${window.location.protocol === "file:" ? "../../../electron-app/softip_display_hash.js" : "softip_display_hash.js?v=20260930-2"}"><\/script>`);
+  </script>
+  <script data-softip-text-diff-loader>
+    document.write(`<script src="${window.location.protocol === "file:" ? "../../../electron-app/text_diff.js" : "text_diff.js?v=20261001-1"}"><\/script>`);
+  </script>
+  <script data-wipo-applicant-history-loader>
+    document.write(`<script src="${window.location.protocol === "file:" ? "../../../electron-app/wipo_applicant_history.js" : "wipo_applicant_history.js?v=20261016-2"}"><\/script>`);
+  </script>
+  <script src="renderer.js?v=20261025-header-settings"></script>
 </body>
 </html>

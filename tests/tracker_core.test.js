@@ -1,15 +1,32 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { parseApplicationNumbers, getRecordApplicationNo, diffRecords, parseCitedDocuments } = require("../tracker_core");
+const { parseApplicationNumbers, normalizeRegistrationNo, parseRegistrationNumbers, getRecordApplicationNo, diffRecords, parseCitedDocuments } = require("../tracker_core");
 
 test("application list input is normalized and deduplicated", () => {
   assert.deepEqual(parseApplicationNumbers("VN 1-2022-01097\n1-2022-01097, 1-2021-00452"), ["1-2022-01097", "1-2021-00452"]);
+  assert.deepEqual(parseApplicationNumbers("DT1-2021-13520\n1-2021-13521"), ["1-2021-13521"]);
 });
 
 test("patent, design, national trademark, international trademark, and compact WIPO IDs are accepted", () => {
   assert.deepEqual(
     parseApplicationNumbers("2-2024-01234\n3-2020-4567\n4-2004-14651\n5-2025-123456\nhttps://wipopublish.ipvietnam.gov.vn/detail?id=VN4200414651"),
     ["2-2024-01234", "3-2020-4567", "4-2004-14651", "5-2025-123456"]
+  );
+  assert.deepEqual(parseApplicationNumbers('4-2025-31926\n5-0736887\n5-0736887'), ['4-2025-31926', '5-0736887']);
+  assert.deepEqual(parseApplicationNumbers('5-158247B\n5-158999\n5-0736887'), ['5-158247B','5-158999','5-0736887']);
+});
+
+test("registration inputs are type-aware and rendered in saturated form", () => {
+  assert.deepEqual(normalizeRegistrationNo("23245", "patent"), { type: "patent", prefix: "1", number: "0023245", suffix: "000", lookupKey: "23245", formatted: "1-0023245-000" });
+  assert.deepEqual(normalizeRegistrationNo("2-0004321-000", "trademark"), { type: "patent", prefix: "2", number: "0004321", suffix: "000", lookupKey: "4321", formatted: "2-0004321-000" });
+  assert.deepEqual(normalizeRegistrationNo("765", "design"), { type: "design", prefix: "3", number: "0000765", suffix: "000", lookupKey: "765", formatted: "3-0000765-000" });
+  assert.deepEqual(normalizeRegistrationNo("4-0012345", "patent"), { type: "trademark", prefix: "4", number: "0012345", suffix: "000", lookupKey: "12345", formatted: "4-0012345-000" });
+  assert.equal(normalizeRegistrationNo("4-0040985-001", "trademark").formatted, "4-0040985-001");
+  assert.deepEqual(parseRegistrationNumbers("23245\n1-0023245 B\n23246", "patent").map((item) => item.formatted), ["1-0023245-000", "1-0023246-000"]);
+  assert.equal(normalizeRegistrationNo("1-2023-02108", "patent"), null);
+  assert.deepEqual(
+    parseRegistrationNumbers("1-2023-02775\n1-0048591-000\n1-2023-01258\n1-0058965-000", "patent").map((item) => item.formatted),
+    ["1-0048591-000", "1-0058965-000"]
   );
 });
 
